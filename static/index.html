@@ -13,12 +13,13 @@
     <nav class="main-nav" aria-label="Primary navigation">
       <button id="navHome" class="nav-item active">Home</button>
       <button id="navMasters" class="nav-item">Masters</button>
+      <button id="navAnalysis" class="nav-item">Analysis</button>
       <button id="navTraining" class="nav-item hidden">Training</button>
     </nav>
     <div class="top-actions">
       <span class="engine-pill"><span class="engine-dot"></span><span id="engineName">Stockfish loads in your browser</span></span>
       <button id="settingsButton" class="header-button">Settings</button>
-      <button id="profileButton" class="profile-button"><span id="profileInitial">G</span><span id="profileName">Guest</span></button>
+      <button id="profileButton" class="profile-button"><span id="profileName">Guest</span></button>
     </div>
   </header>
 
@@ -36,17 +37,24 @@
         <div class="search-meta"><span>Last 7 days, then latest 20 as fallback</span><span id="heroError" class="inline-error" role="alert"></span></div>
       </div>
 
-      <section class="masters-section" id="mastersSection">
-        <div class="section-heading">
-          <div><span class="eyebrow"><span></span> Featured study decks</span><h2>Learn from masters' games</h2></div>
-        </div>
-        <div class="master-grid">
-          <article class="master-card" data-master="MagnusCarlsen"><span class="master-monogram">MC</span><div><h3>Magnus Carlsen</h3><p>MagnusCarlsen · Chess.com</p></div><div class="study-actions"><button>Study mistakes</button></div></article>
-          <article class="master-card" data-master="Hikaru"><span class="master-monogram">HN</span><div><h3>Hikaru Nakamura</h3><p>Hikaru · Chess.com</p></div><div class="study-actions"><button>Study mistakes</button></div></article>
-          <article class="master-card" data-master="GothamChess"><span class="master-monogram">LR</span><div><h3>Levy Rozman</h3><p>GothamChess · Chess.com</p></div><div class="study-actions"><button>Study mistakes</button></div></article>
-          <article class="master-card" data-master="fabianocaruana"><span class="master-monogram">FC</span><div><h3>Fabiano Caruana</h3><p>fabianocaruana · Chess.com</p></div><div class="study-actions"><button>Study mistakes</button></div></article>
-        </div>
-      </section>
+    </section>
+
+    <section id="mastersPage" class="masters-page hidden">
+      <div class="page-heading"><div><span class="eyebrow"><span></span> Grandmaster study</span><h1>Learn from the strongest players.</h1><p>Search 1,700+ verified Chess.com grandmasters, then turn their latest 100 games into mistake or brilliancy training.</p></div></div>
+      <section><div class="section-heading"><div><span class="panel-kicker">Featured grandmasters</span><h2>Start with a leading player</h2></div></div><div id="featuredMasters" class="master-grid master-grid-large"></div></section>
+      <section class="gm-directory"><div class="section-heading directory-heading"><div><span class="panel-kicker">Chess.com titled directory</span><h2>All grandmasters</h2></div><label class="gm-search">Search<input id="gmSearch" type="search" placeholder="Player handle" autocomplete="off"></label></div><p id="gmDirectoryStatus" class="directory-status">Loading the grandmaster directory…</p><div id="gmDirectory" class="master-grid master-grid-directory"></div></section>
+    </section>
+
+    <section id="analysisPage" class="analysis-page hidden">
+      <div class="page-heading analysis-heading"><div><span class="eyebrow"><span></span> Free analysis board</span><h1>Explore any position.</h1><p>Play legal moves, edit every square, load a FEN, and ask your selected engine for its best continuation.</p></div><div class="analysis-toolbar"><button id="analysisResetButton" class="secondary-button">Starting position</button><button id="analysisUndoButton" class="secondary-button">Undo</button><button id="analysisFlipButton" class="secondary-button">Flip</button><button id="analysisEditButton" class="secondary-button">Edit position</button></div></div>
+      <div class="analysis-workspace">
+        <section class="analysis-board-column"><div id="analysisBoardShell" class="analysis-board-shell theme-brown"><div id="analysisBoard" class="analysis-board" aria-label="General analysis chess board"></div></div><div id="analysisBoardError" class="inline-error" role="alert"></div></section>
+        <aside class="analysis-sidebar">
+          <section id="analysisEditor" class="analysis-card hidden"><div class="analysis-card-heading"><span class="panel-kicker">Position editor</span><button id="analysisClearButton" class="text-button">Clear board</button></div><div id="analysisPalette" class="analysis-palette"></div><label>Side to move<select id="analysisTurn"><option value="w">White</option><option value="b">Black</option></select></label><label>FEN<div class="fen-row"><input id="analysisFen" spellcheck="false"><button id="analysisLoadFenButton" class="secondary-button">Set</button></div></label><p>Use the palette and board for visual editing. FEN gives full control of castling and en-passant rights.</p></section>
+          <section class="analysis-card engine-analysis-card"><div class="analysis-card-heading"><span class="panel-kicker">Engine</span><button id="analyzePositionButton" class="primary-button">Analyze position</button></div><div class="analysis-evaluation"><strong id="analysisEngineEval">—</strong><span id="analysisEngineResult">Ready for analysis.</span></div><div class="engine-line"><span>Best continuation</span><strong id="analysisEngineLine">—</strong></div></section>
+          <section class="analysis-card notation-analysis-card"><span class="panel-kicker">Move notation</span><div id="analysisNotation" class="analysis-notation"><p>Play moves on the board to build notation.</p></div></section>
+        </aside>
+      </div>
     </section>
 
     <section id="trainer" class="trainer hidden">

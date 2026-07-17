@@ -32,6 +32,9 @@ jobs:
           node --check static/lib/engine-providers.js
           node --check static/lib/game-import.js
           node --check static/lib/profile-store.js
+          node --check static/lib/analysis-board.js
+          node --check static/lib/brilliancy.js
+          node --check static/lib/masters.js
       - name: Upload static site
         uses: actions/upload-pages-artifact@v4
         with:

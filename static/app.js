@@ -2,8 +2,11 @@ import { Chess } from "./vendor/chess/chess.js";
 import { importGames, getGameDetail as buildGameDetail } from "./lib/game-import.js";
 import { createEngine, engineDescriptor, engineDescriptors, SEARCH_DEPTH } from "./lib/engine-providers.js";
 import { activateDeviceProfile, clearProfileSession, continueAsGuest, createDeviceProfile, listDeviceProfiles, restoreProfileSession } from "./lib/profile-store.js";
+import { alternativeMoves, explainBrilliancy, findSacrificeCandidate, pvMaterialInvestment } from "./lib/brilliancy.js";
+import { FEATURED_MASTERS, fetchGrandmasterHandles } from "./lib/masters.js";
+import { initAnalysisBoard } from "./lib/analysis-board.js";
 
-const ANALYSIS_VERSION = 7;
+const ANALYSIS_VERSION = 8;
 const MIN_LOSS = 300;
 const DAY = 24 * 60 * 60 * 1000;
 const DEFAULT_PREFS = {
@@ -26,6 +29,7 @@ const state = {
   displayName: "",
   source: "chesscom",
   scope: "recent",
+  focus: "all",
   games: [],
   window: "Last 7 days",
   selectedIds: new Set(),
@@ -46,7 +50,11 @@ const state = {
   practiceQueue: Promise.resolve(),
   wrongEvalToken: 0,
   audioContext: null,
+  grandmasters: [],
 };
+
+let generalAnalysisBoard = null;
+let grandmastersLoading = null;
 
 function escapeHtml(value) {
   return String(value ?? "").replace(/[&<>'"]/g, char => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", "'": "&#39;", '"': "&quot;" }[char]));
@@ -74,10 +82,12 @@ $("#importForm").addEventListener("submit", async event => {
   await startStudy(username, $("#gameSource").value, "recent", username, button);
 });
 
-async function startStudy(username, source, scope = "recent", displayName = username, button = null) {
+async function startStudy(username, source, scope = "recent", displayName = username, button = null, focus = "all") {
   $("#heroError").textContent = "";
+  const fromMasters = !$("#mastersPage").classList.contains("hidden");
   if (button) button.disabled = true;
   const buttonLabel = button?.querySelector("span:first-child");
+  const originalButtonLabel = buttonLabel?.textContent;
   if (buttonLabel) buttonLabel.textContent = "Loading games…";
   try {
     const data = await importGames({ username, source, scope });
@@ -86,6 +96,7 @@ async function startStudy(username, source, scope = "recent", displayName = user
     state.displayName = displayName;
     state.source = source;
     state.scope = scope;
+    state.focus = focus;
     state.games = data.games;
     state.window = data.window;
     state.details.clear();
@@ -94,21 +105,27 @@ async function startStudy(username, source, scope = "recent", displayName = user
     enterTrainer();
     await buildDeck();
   } catch (error) {
-    $("#heroError").textContent = error.message;
-    goHome();
+    if (fromMasters) {
+      showMasters();
+      showToast(error.message);
+    } else {
+      $("#heroError").textContent = error.message;
+      goHome();
+    }
   } finally {
     if (button) button.disabled = false;
-    if (buttonLabel) buttonLabel.textContent = "Build deck";
+    if (buttonLabel) buttonLabel.textContent = originalButtonLabel || "Build deck";
   }
 }
 
 function enterTrainer() {
   document.body.classList.add("puzzle-room");
-  $("#hero").classList.add("hidden");
+  hideMainViews();
   $("#trainer").classList.remove("hidden");
   $("#navTraining").classList.remove("hidden");
   setActiveNav("training");
-  $("#deckTitle").textContent = `${state.displayName || state.username}'s mistake`;
+  const lesson = state.focus === "brilliancies" ? "brilliancy" : state.focus === "mistakes" ? "mistake" : "lesson";
+  $("#deckTitle").textContent = `${state.displayName || state.username}'s ${lesson}`;
   $("#gameWindow").textContent = state.window;
   $("#gamesCount").textContent = state.games.length;
   applyPreferences();
@@ -120,11 +137,37 @@ function setActiveNav(name) {
   $$(".nav-item").forEach(item => item.classList.toggle("active", item.id === `nav${name[0].toUpperCase()}${name.slice(1)}`));
 }
 
+function hideMainViews() {
+  for (const id of ["hero", "mastersPage", "analysisPage", "trainer"]) $(`#${id}`).classList.add("hidden");
+}
+
 function goHome() {
   document.body.classList.remove("puzzle-room");
-  $("#trainer").classList.add("hidden");
+  hideMainViews();
   $("#hero").classList.remove("hidden");
   setActiveNav("home");
+}
+
+function showMasters() {
+  document.body.classList.remove("puzzle-room");
+  hideMainViews();
+  $("#mastersPage").classList.remove("hidden");
+  setActiveNav("masters");
+  loadGrandmasterDirectory();
+}
+
+function showAnalysis() {
+  document.body.classList.remove("puzzle-room");
+  hideMainViews();
+  $("#analysisPage").classList.remove("hidden");
+  setActiveNav("analysis");
+  if (!generalAnalysisBoard) {
+    generalAnalysisBoard = initAnalysisBoard({
+      getPieceSet: () => state.prefs.pieces,
+      getEngineProvider: () => state.prefs.engineProvider,
+    });
+  } else generalAnalysisBoard.refresh();
+  applyPreferences();
 }
 
 async function buildDeck(force = false) {
@@ -133,6 +176,7 @@ async function buildDeck(force = false) {
   if (!selectedGames.length) return showToast("Select at least one game.");
   state.analyzing = true;
   state.puzzles = [];
+  state.current = null;
   state.sessionSeen.clear();
   const provider = engineDescriptor(state.prefs.engineProvider);
   showAnswer("thinking");
@@ -150,32 +194,36 @@ async function buildDeck(force = false) {
   try {
     for (const game of selectedGames) {
       const detail = await getGameDetail(game.id);
-      const cached = cache.games[game.id];
+      const cached = cache.games[game.id]?.[state.focus];
       let gamePuzzles = !force && cached?.engine === provider.fingerprint ? cached.puzzles : null;
       if (!gamePuzzles) {
         if (!engine) {
           engine = createEngine(provider.id);
           await engine.init();
         }
-        $("#analysisTitle").textContent = `${provider.name} · finding mistakes vs ${game.opponent}`;
+        const target = state.focus === "brilliancies" ? "brilliancies" : state.focus === "mistakes" ? "mistakes" : "lessons";
+        $("#analysisTitle").textContent = `${provider.name} · finding ${target} vs ${game.opponent}`;
         gamePuzzles = await analyzeGameInBrowser(engine, detail, game, (current, total) => {
           $("#analysisDetail").textContent = `Move ${current} of ${total} · depth ${SEARCH_DEPTH}`;
         });
-        cache.games[game.id] = { engine: provider.fingerprint, analyzedAt: Date.now(), puzzles: gamePuzzles };
+        cache.games[game.id] ||= {};
+        cache.games[game.id][state.focus] = { engine: provider.fingerprint, analyzedAt: Date.now(), puzzles: gamePuzzles };
         saveJson(analysisKey(), cache);
       }
       state.puzzles.push(...gamePuzzles);
+      state.puzzles.sort((a, b) => (b.impact ?? b.loss) - (a.impact ?? a.loss));
       finished += 1;
       $("#analysisProgress").style.width = `${Math.round((finished / selectedGames.length) * 100)}%`;
+      updateStats();
+      if (!state.current && state.puzzles.length) await showNextPuzzle();
     }
-    state.puzzles.sort((a, b) => b.loss - a.loss);
     $("#engineName").textContent = `${provider.name} · analysis ready`;
     updateStats();
-    if (state.puzzles.length) await showNextPuzzle();
-    else showAnswer("empty");
+    if (!state.current && state.puzzles.length) await showNextPuzzle();
+    else if (!state.puzzles.length) showAnswer("empty");
   } catch (error) {
     console.error(error);
-    showAnswer("welcome");
+    if (!state.current) showAnswer("welcome");
     showToast(error.message || "Browser analysis failed.");
   } finally {
     engine?.close();
@@ -197,6 +245,8 @@ async function analyzeGameInBrowser(engine, detail, game, onProgress) {
     const move = playerMoves[index];
     const fen = detail.frames[move.ply - 1].fen;
     onProgress(index + 1, playerMoves.length);
+    const sacrifice = findSacrificeCandidate(fen, move.uci);
+    if (state.focus === "brilliancies" && !sacrifice) continue;
     const best = await engine.evaluate(fen);
     if (!best.bestmove || best.bestmove === "(none)") continue;
     const playedMatchesBest = move.uci === best.bestmove || move.uci.slice(0, 4) === best.bestmove.slice(0, 4) && !best.bestmove[4];
@@ -205,9 +255,29 @@ async function analyzeGameInBrowser(engine, detail, game, onProgress) {
     const bestMoveInfo = findVerboseMove(position, best.bestmove);
     const bestSan = bestMoveInfo?.san || best.bestmove;
 
-    if (!playedMatchesBest) {
-      const played = await engine.evaluate(fen, move.uci);
-      const loss = Math.max(0, bestValue - scoreValue(played));
+    let played = playedMatchesBest ? best : null;
+    if (!playedMatchesBest && (state.focus !== "brilliancies" || sacrifice)) played = await engine.evaluate(fen, move.uci);
+    const playedValue = played ? scoreValue(played) : bestValue;
+    const loss = Math.max(0, bestValue - playedValue);
+
+    if (sacrifice && loss <= 35 && playedValue >= -50) {
+      const alternatives = alternativeMoves(fen, move.uci);
+      const alternative = alternatives.length ? await engine.evaluate(fen, alternatives) : null;
+      const alternativeValue = alternative ? scoreValue(alternative) : -100000;
+      const competitive = alternativeValue < 700;
+      const endgameOnlyMove = sacrifice.pieceCount > 12 || playedValue - alternativeValue >= 80;
+      if (competitive && endgameOnlyMove) {
+        const brilliantResult = { ...played, bestmove: move.uci, pv: played?.pv?.[0]?.slice(0, 4) === move.uci.slice(0, 4) ? played.pv : [move.uci, ...(played?.pv || [])] };
+        const pvInvestment = pvMaterialInvestment(fen, brilliantResult.pv, sacrifice.moverColor);
+        const brilliantSan = findVerboseMove(new Chess(fen), move.uci)?.san || move.san;
+        puzzles.push(makePuzzle(game, move, fen, "Brilliancy", loss, brilliantResult, brilliantSan, brilliantResult, engine.descriptor, {
+          impact: Math.max(sacrifice.investment, pvInvestment),
+          explanation: explainBrilliancy(sacrifice, pvInvestment),
+        }));
+      }
+    }
+
+    if (state.focus !== "brilliancies" && !playedMatchesBest) {
       const missedMate = best.mate !== null && best.mate > 0 && !(played.mate !== null && played.mate > 0);
       if (missedMate || loss >= MIN_LOSS) {
         let category = "Blunder";
@@ -221,7 +291,7 @@ async function analyzeGameInBrowser(engine, detail, game, onProgress) {
   return puzzles;
 }
 
-function makePuzzle(game, move, fen, category, loss, best, bestSan, played, provider) {
+function makePuzzle(game, move, fen, category, loss, best, bestSan, played, provider, extra = {}) {
   return {
     id: `${game.id}:${move.ply}:${category.toLowerCase().replaceAll(" ", "-")}`,
     gameId: game.id,
@@ -230,6 +300,8 @@ function makePuzzle(game, move, fen, category, loss, best, bestSan, played, prov
     fen,
     category,
     loss: Math.min(loss, 100000),
+    impact: extra.impact ?? Math.min(loss, 100000),
+    explanation: extra.explanation || "",
     best: best.bestmove,
     bestSan,
     bestEval: formatEval(best),
@@ -310,10 +382,10 @@ async function loadPuzzle(puzzle) {
   const category = $("#puzzleCategory");
   category.textContent = "Your move";
   category.className = "category";
-  $("#puzzlePrompt").textContent = "Find the best move in this position";
+  $("#puzzlePrompt").textContent = puzzle.category === "Brilliancy" ? "Find the brilliant move in this position" : "Find the best move in this position";
   $("#puzzleOpponent").textContent = `vs ${puzzle.game.opponent}`;
   $("#puzzleMeta").textContent = `${puzzle.game.date} · ${puzzle.game.timeClass} · move ${puzzle.moveNumber}`;
-  $("#puzzleHint").textContent = "Look for checks, captures, and forcing threats.";
+  $("#puzzleHint").textContent = puzzle.category === "Brilliancy" ? "Look for a sound sacrifice whose tactical point survives the best defense." : "Look for checks, captures, and forcing threats.";
   const detail = await getGameDetail(puzzle.gameId);
   renderNotation(detail, puzzle, false);
 }
@@ -543,9 +615,10 @@ function revealSolution(correct) {
   $("#puzzleCategory").textContent = state.current.category;
   $("#puzzleCategory").className = `category ${categoryClass}`;
   $("#solutionKicker").textContent = `${correct ? "Correct" : "Solution"} · ${state.current.category}`;
-  $("#solutionTitle").textContent = correct ? "That is the move." : "This was the stronger move.";
-  $("#playedLabel").textContent = "Played in the game";
-  $("#bestLabel").textContent = "Best move";
+  const brilliant = state.current.category === "Brilliancy";
+  $("#solutionTitle").textContent = brilliant ? (state.current.explanation || "The sacrifice holds up to engine defense.") : correct ? "That is the move." : "This was the stronger move.";
+  $("#playedLabel").textContent = brilliant ? "Found in the game" : "Played in the game";
+  $("#bestLabel").textContent = brilliant ? "Brilliant move" : "Best move";
   $("#playedMove").textContent = state.current.playedSan;
   const providerName = state.current.engineName || engineDescriptor(state.prefs.engineProvider).name;
   $("#playedEval").textContent = `${providerName} ${state.current.playedEval}`;
@@ -673,6 +746,7 @@ $("#startAnalysisButton").addEventListener("click", () => buildDeck(true));
 function applyPreferences() {
   document.body.dataset.siteTheme = state.prefs.siteTheme || "light";
   $("#boardShell").className = `board-shell theme-${state.prefs.theme}`;
+  $("#analysisBoardShell").className = `analysis-board-shell theme-${state.prefs.theme}`;
   document.body.classList.toggle("reduce-effects", !state.prefs.effectsEnabled);
   $("#effectsToggle").checked = state.prefs.effectsEnabled !== false;
   $("#masterVolume").value = Math.round((state.prefs.masterVolume ?? .65) * 100);
@@ -684,6 +758,7 @@ function applyPreferences() {
   const provider = engineDescriptor(state.prefs.engineProvider);
   if (!state.analyzing) $("#engineName").textContent = provider.id === "stockfish-browser" ? `${provider.name} loads in your browser` : provider.name;
   if (state.puzzleChess) renderBoard();
+  generalAnalysisBoard?.refresh();
 }
 
 function renderEngineChoices() {
@@ -858,7 +933,6 @@ function loadAccountPreferences() {
 
 function updateIdentityUI() {
   const name = state.appUser?.username || "Guest";
-  $("#profileInitial").textContent = name[0]?.toUpperCase() || "G";
   $("#profileName").textContent = name;
   $("#profileDialogName").textContent = name;
   $("#settingsAccountName").textContent = name;
@@ -866,10 +940,49 @@ function updateIdentityUI() {
   $("#logoutButton").textContent = state.appUser ? "Switch profile" : "Leave guest session";
 }
 
-const masterNames = { MagnusCarlsen: "Magnus Carlsen", Hikaru: "Hikaru Nakamura", GothamChess: "Levy Rozman", fabianocaruana: "Fabiano Caruana" };
-$$('.master-card').forEach(card => card.querySelector('button').addEventListener("click", () => {
-  startStudy(card.dataset.master, "chesscom", "latest", masterNames[card.dataset.master]);
-}));
+function masterCard(player, directory = false) {
+  return `<article class="master-card ${directory ? "directory-card" : ""}">
+    <div><h3>${escapeHtml(player.name || player.username)}</h3><p>chess.com/member/${escapeHtml(player.username)}</p></div>
+    <div class="study-actions">
+      <button type="button" data-master="${escapeHtml(player.username)}" data-master-name="${escapeHtml(player.name || player.username)}" data-focus="mistakes"><span>Learn from mistakes</span></button>
+      <button type="button" data-master="${escapeHtml(player.username)}" data-master-name="${escapeHtml(player.name || player.username)}" data-focus="brilliancies"><span>Learn from brilliancies</span></button>
+    </div>
+  </article>`;
+}
+
+function bindMasterActions(container) {
+  container.querySelectorAll("[data-master]").forEach(button => button.addEventListener("click", () => {
+    startStudy(button.dataset.master, "chesscom", "latest100", button.dataset.masterName, button, button.dataset.focus);
+  }));
+}
+
+function renderFeaturedMasters() {
+  const container = $("#featuredMasters");
+  container.innerHTML = FEATURED_MASTERS.map(player => masterCard(player)).join("");
+  bindMasterActions(container);
+}
+
+function renderGrandmasterDirectory(query = "") {
+  const normalized = query.trim().toLowerCase();
+  const matching = state.grandmasters.filter(username => username.toLowerCase().includes(normalized));
+  const shown = matching.slice(0, 80);
+  $("#gmDirectoryStatus").textContent = `Showing ${shown.length.toLocaleString()} of ${matching.length.toLocaleString()} matching grandmasters · ${state.grandmasters.length.toLocaleString()} verified total`;
+  $("#gmDirectory").innerHTML = shown.map(username => masterCard({ username, name: username }, true)).join("");
+  bindMasterActions($("#gmDirectory"));
+}
+
+async function loadGrandmasterDirectory() {
+  if (state.grandmasters.length) return renderGrandmasterDirectory($("#gmSearch").value);
+  if (!grandmastersLoading) grandmastersLoading = fetchGrandmasterHandles();
+  try {
+    state.grandmasters = await grandmastersLoading;
+    renderGrandmasterDirectory($("#gmSearch").value);
+  } catch (error) {
+    $("#gmDirectoryStatus").textContent = error.message;
+  } finally {
+    grandmastersLoading = null;
+  }
+}
 
 $("#gameSource").addEventListener("change", event => {
   $("#sourcePrefix").textContent = event.currentTarget.value === "lichess" ? "lichess.org/@/" : "chess.com/";
@@ -877,12 +990,10 @@ $("#gameSource").addEventListener("change", event => {
 
 $("#brandHome").addEventListener("click", event => { event.preventDefault(); goHome(); });
 $("#navHome").addEventListener("click", goHome);
-$("#navMasters").addEventListener("click", () => {
-  goHome();
-  setActiveNav("masters");
-  $("#mastersSection").scrollIntoView({ behavior: state.prefs.effectsEnabled ? "smooth" : "auto", block: "start" });
-});
+$("#navMasters").addEventListener("click", showMasters);
+$("#navAnalysis").addEventListener("click", showAnalysis);
 $("#navTraining").addEventListener("click", () => { if (state.games.length) enterTrainer(); });
+$("#gmSearch").addEventListener("input", event => renderGrandmasterDirectory(event.currentTarget.value));
 
 $$('[data-close]').forEach(button => button.addEventListener("click", () => $(`#${button.dataset.close}`).close()));
 
@@ -901,6 +1012,7 @@ state.appUser = restored.profile;
 state.guest = restored.guest;
 loadAccountPreferences();
 renderEngineChoices();
+renderFeaturedMasters();
 renderProfileChoices();
 updateIdentityUI();
 if (!state.appUser && !state.guest) $("#authDialog").showModal();

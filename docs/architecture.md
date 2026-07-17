@@ -44,7 +44,7 @@ That gateway should:
 
 1. Verify the short-lived Replay token.
 2. Check the user's entitlement and remaining credits.
-3. Validate FEN, optional `searchMove`, and bounded analysis limits.
+3. Validate FEN, optional `searchMoves`, and bounded analysis limits.
 4. Queue work for Lc0 or Reckless without exposing provider credentials.
 5. Atomically debit metered usage and return a normalized UCI-style result.
 
@@ -61,7 +61,7 @@ type EngineResult = {
 ```
 
 Centipawn and mate scores use the UCI side-to-move perspective. The gateway
-must preserve that perspective for both unrestricted and `searchMove` calls.
+must preserve that perspective for both unrestricted and `searchMoves` calls.
 
 Returning this small contract keeps puzzle generation independent from any
 specific vendor. A future asynchronous gateway can add a job resource while
