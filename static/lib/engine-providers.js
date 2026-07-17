@@ -6,6 +6,7 @@ const browserDescriptor = {
   id: "stockfish-browser",
   name: "Stockfish 18",
   detail: "Runs privately in this browser",
+  tier: "free",
   configured: true,
   fingerprint: "stockfish-18-lite-single:depth-12",
 };
@@ -16,6 +17,7 @@ export function engineDescriptors() {
     ...replayConfig.remoteEngines.map(engine => ({
       ...engine,
       detail: engine.description,
+      tier: engine.tier || "plus",
       configured: Boolean(engine.endpoint),
       fingerprint: `${engine.id}:${engine.version || "remote-v1"}:depth-12`,
     })),

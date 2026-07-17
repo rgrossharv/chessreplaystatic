@@ -134,7 +134,13 @@ async function chessComRecord(raw, username) {
 async function importChessCom(username, latestLimit = null) {
   const base = `https://api.chess.com/pub/player/${encodeURIComponent(username.toLowerCase())}`;
   const archives = (await fetchJson(`${base}/games/archives`)).archives || [];
-  if (!archives.length) return { games: [], window: "Last 7 days" };
+  if (!archives.length) {
+    return {
+      games: [],
+      window: "No games found",
+      emptyMessage: "That Chess.com account exists, but Replay could not find any public standard games to import.",
+    };
+  }
 
   const cutoff = Math.floor(Date.now() / 1000) - WEEK_SECONDS;
   const rawGames = [];
@@ -153,10 +159,21 @@ async function importChessCom(username, latestLimit = null) {
     const record = await chessComRecord(raw, username);
     if (record) games.push(remember(record));
   }
-  return { games, window: usingRecent ? "Last 7 days" : `Latest ${latestLimit || 20} games` };
+  const shortFallback = latestLimit === null && !usingRecent && games.length < 20;
+  return {
+    games,
+    window: usingRecent ? "Last 7 days" : shortFallback ? `All ${games.length} available games` : `Latest ${latestLimit || 20} games`,
+    notice: latestLimit === null && !usingRecent
+      ? shortFallback
+        ? `No games were found in the last 7 days, so Replay imported all ${games.length} public standard games available for this account.`
+        : "No games were found in the last 7 days, so Replay imported the latest 20 public games instead."
+      : "",
+    emptyMessage: "That Chess.com account was found, but Replay could not import any public standard chess games.",
+  };
 }
 
 async function importLichess(username, latestLimit = null) {
+  await fetchJson(`https://lichess.org/api/user/${encodeURIComponent(username)}`);
   const cutoffMs = Date.now() - WEEK_SECONDS * 1000;
   const params = new URLSearchParams({
     max: String(latestLimit || 100),
@@ -204,7 +221,17 @@ async function importLichess(username, latestLimit = null) {
     remember({ id, username, pgn, url: headers.Site || "", summary });
     games.push(summary);
   }
-  return { games, window: usingRecent ? "Last 7 days" : `Latest ${latestLimit || 20} games` };
+  const shortFallback = latestLimit === null && !usingRecent && games.length < 20;
+  return {
+    games,
+    window: usingRecent ? "Last 7 days" : shortFallback ? `All ${games.length} available games` : `Latest ${latestLimit || 20} games`,
+    notice: latestLimit === null && !usingRecent
+      ? shortFallback
+        ? `No games were found in the last 7 days, so Replay imported all ${games.length} public standard games available for this account.`
+        : "No games were found in the last 7 days, so Replay imported the latest 20 public games instead."
+      : "",
+    emptyMessage: "That Lichess account was found, but Replay could not import any public standard chess games.",
+  };
 }
 
 export async function importGames({ username: rawUsername, source = "chesscom", scope = "recent" }) {

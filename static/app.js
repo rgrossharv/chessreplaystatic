@@ -1,13 +1,13 @@
 import { Chess } from "./vendor/chess/chess.js";
 import { importGames, getGameDetail as buildGameDetail } from "./lib/game-import.js";
 import { createEngine, engineDescriptor, engineDescriptors, SEARCH_DEPTH } from "./lib/engine-providers.js";
-import { activateDeviceProfile, clearProfileSession, continueAsGuest, createDeviceProfile, listDeviceProfiles, restoreProfileSession } from "./lib/profile-store.js";
+import { activateDeviceProfile, clearProfileSession, continueAsGuest, createDeviceProfile, hasPremiumEntitlement, listDeviceProfiles, restoreProfileSession } from "./lib/profile-store.js";
 import { alternativeMoves, analyzeSacrificeLine, BRILLIANCY_THRESHOLDS, explainBrilliancy, findSacrificeCandidate, isSoundBrilliancy } from "./lib/brilliancy.js";
+import { classifyPuzzleEligibility } from "./lib/puzzle-rules.js";
 import { FEATURED_MASTERS, fetchGrandmasterHandles } from "./lib/masters.js";
 import { initAnalysisBoard } from "./lib/analysis-board.js";
 
 const ANALYSIS_VERSION = 9;
-const MIN_LOSS = 300;
 const DAY = 24 * 60 * 60 * 1000;
 const DEFAULT_PREFS = {
   siteTheme: "light",
@@ -64,6 +64,9 @@ function identityKey() { return state.appUser?.id || "guest"; }
 function analysisKey() { return `replay:analysis:${state.source}:${state.username.toLowerCase()}`; }
 function scheduleKey() { return `replay:schedule:${identityKey()}:${state.source}:${state.username.toLowerCase()}`; }
 function prefsKey() { return `replay:prefs:${identityKey()}`; }
+function hasPlus() { return hasPremiumEntitlement(state.appUser); }
+function engineRequiresPlus(provider) { return provider.tier === "plus"; }
+function canUseEngine(provider) { return provider.configured && (!engineRequiresPlus(provider) || hasPlus()); }
 
 function loadJson(key, fallback) {
   try { return JSON.parse(localStorage.getItem(key)) ?? fallback; }
@@ -93,7 +96,7 @@ async function startStudy(username, source, scope = "recent", displayName = user
   if (buttonLabel) buttonLabel.textContent = "Loading games…";
   try {
     const data = await importGames({ username, source, scope });
-    if (!data.games.length) throw new Error("No public games were found for that account.");
+    if (!data.games.length) throw new Error(data.emptyMessage || "No public games were found for that account.");
     state.username = username;
     state.displayName = displayName;
     state.source = source;
@@ -105,6 +108,7 @@ async function startStudy(username, source, scope = "recent", displayName = user
     state.selectedIds = new Set(data.games.map(game => game.id));
     localStorage.setItem("replay:last-user", username);
     enterTrainer();
+    if (data.notice) showToast(data.notice);
     await buildDeck();
   } catch (error) {
     if (fromMasters) {
@@ -141,7 +145,7 @@ function setActiveNav(name) {
 }
 
 function hideMainViews() {
-  for (const id of ["hero", "mastersPage", "analysisPage", "trainer"]) $(`#${id}`).classList.add("hidden");
+  for (const id of ["hero", "mastersPage", "analysisPage", "pricingPage", "trainer"]) $(`#${id}`).classList.add("hidden");
 }
 
 function goHome() {
@@ -177,15 +181,28 @@ function showAnalysis() {
   applyPreferences();
 }
 
+function showPricing(reason = "") {
+  document.body.classList.remove("puzzle-room");
+  document.body.classList.remove("analysis-room");
+  hideMainViews();
+  $("#pricingPage").classList.remove("hidden");
+  setActiveNav("pricing");
+  if (reason) showToast(reason);
+}
+
 async function buildDeck(force = false) {
   if (state.analyzing) return;
   const selectedGames = state.games.filter(game => state.selectedIds.has(game.id));
   if (!selectedGames.length) return showToast("Select at least one game.");
+  const provider = engineDescriptor(state.prefs.engineProvider);
+  if (!canUseEngine(provider)) {
+    showPricing(`${provider.name} requires Replay Plus. Existing Plus-analyzed decks stay reviewable, but new remote analysis needs an active subscription.`);
+    return;
+  }
   state.analyzing = true;
   state.puzzles = [];
   state.current = null;
   state.sessionSeen.clear();
-  const provider = engineDescriptor(state.prefs.engineProvider);
   showAnswer("thinking");
   $("#thinkingEngine").textContent = provider.name;
   $("#thinkingDetail").textContent = provider.id === "stockfish-browser" ? "Your browser is evaluating the selected games." : "Your configured compute service is evaluating the selected games.";
@@ -286,12 +303,14 @@ async function analyzeGameInBrowser(engine, detail, game, onProgress) {
     }
 
     if (state.focus !== "brilliancies" && !playedMatchesBest) {
-      const missedMate = best.mate !== null && best.mate > 0 && !(played.mate !== null && played.mate > 0);
-      if (missedMate || loss >= MIN_LOSS) {
-        let category = "Blunder";
-        if (missedMate) category = "Missed mate";
-        else if (bestValue >= 300) category = "Missed win";
-        puzzles.push(makePuzzle(game, move, fen, category, loss, best, bestSan, played, engine.descriptor));
+      const eligibility = classifyPuzzleEligibility({
+        bestValue,
+        playedValue,
+        bestMate: best.mate,
+        playedMate: played.mate,
+      });
+      if (eligibility.eligible) {
+        puzzles.push(makePuzzle(game, move, fen, eligibility.category, eligibility.loss, best, bestSan, played, engine.descriptor));
       }
     }
 
@@ -764,18 +783,29 @@ function applyPreferences() {
   $$('[data-pieces]').forEach(button => button.classList.toggle("active", button.dataset.pieces === state.prefs.pieces));
   $$('[data-engine-provider]').forEach(button => button.classList.toggle("active", button.dataset.engineProvider === state.prefs.engineProvider));
   const provider = engineDescriptor(state.prefs.engineProvider);
-  if (!state.analyzing) $("#engineName").textContent = provider.id === "stockfish-browser" ? `${provider.name} loads in your browser` : provider.name;
+  const tier = engineRequiresPlus(provider) ? "Plus" : "Free";
+  if (!state.analyzing) $("#engineName").textContent = provider.id === "stockfish-browser" ? `${provider.name} loads in your browser · ${tier}` : `${provider.name} · ${tier}`;
   if (state.puzzleChess) renderBoard();
   generalAnalysisBoard?.refresh();
 }
 
 function renderEngineChoices() {
-  $("#engineChoices").innerHTML = engineDescriptors().map(provider => `<button type="button" data-engine-provider="${provider.id}" ${provider.configured ? "" : "disabled"}>
+  $("#engineChoices").innerHTML = engineDescriptors().map(provider => {
+    const requiresPlus = engineRequiresPlus(provider);
+    const available = canUseEngine(provider);
+    const badge = !provider.configured ? "Endpoint needed" : requiresPlus ? (hasPlus() ? "Plus active" : "Plus") : "Included";
+    return `<button type="button" data-engine-provider="${provider.id}" class="${requiresPlus && !available ? "locked" : ""}" ${provider.configured ? "" : "disabled"}>
     <span><strong>${escapeHtml(provider.name)}</strong><small>${escapeHtml(provider.detail || "Remote analysis")}</small></span>
-    <em>${provider.configured ? (provider.id === "stockfish-browser" ? "Included" : "Configured") : "Endpoint needed"}</em>
-  </button>`).join("");
+    <em>${badge}</em>
+  </button>`;
+  }).join("");
   $$('[data-engine-provider]').forEach(button => button.addEventListener("click", () => {
     if (button.disabled || button.dataset.engineProvider === state.prefs.engineProvider) return;
+    const provider = engineDescriptor(button.dataset.engineProvider);
+    if (!canUseEngine(provider)) {
+      showPricing(`${provider.name} is a Plus engine. Upgrade before starting new Lc0 or Reckless analysis.`);
+      return;
+    }
     state.practiceEngine?.close();
     state.practiceEngine = null;
     state.practiceEnginePromise = null;
@@ -811,7 +841,8 @@ $$('[data-pieces]').forEach(button => button.addEventListener("click", () => {
 }));
 
 $("#profileButton").addEventListener("click", () => {
-  $("#profileDialogName").textContent = state.appUser?.username || "Guest";
+  const name = state.appUser?.username || "Guest";
+  $("#profileDialogName").textContent = `${name} · ${hasPlus() ? "Plus active" : "Free"}`;
   updateStats();
   $("#profileDialog").showModal();
 });
@@ -882,6 +913,7 @@ function submitProfile(event) {
     state.appUser = createDeviceProfile(values.username);
     state.guest = false;
     loadAccountPreferences();
+    renderEngineChoices();
     updateIdentityUI();
     $("#authDialog").close();
   } catch (error) {
@@ -900,6 +932,7 @@ function renderProfileChoices() {
       state.appUser = activateDeviceProfile(button.dataset.profileId);
       state.guest = false;
       loadAccountPreferences();
+      renderEngineChoices();
       updateIdentityUI();
       $("#authDialog").close();
     } catch (error) {
@@ -914,6 +947,7 @@ $("#guestButton").addEventListener("click", () => {
   state.guest = true;
   continueAsGuest();
   loadAccountPreferences();
+  renderEngineChoices();
   updateIdentityUI();
   $("#authDialog").close();
 });
@@ -929,28 +963,34 @@ $("#logoutButton").addEventListener("click", () => {
   $("#settingsDialog").close();
   goHome();
   updateIdentityUI();
+  renderEngineChoices();
   renderProfileChoices();
   $("#authDialog").showModal();
 });
 
 function loadAccountPreferences() {
   state.prefs = { ...DEFAULT_PREFS, ...loadJson(prefsKey(), {}) };
-  if (!engineDescriptor(state.prefs.engineProvider).configured) state.prefs.engineProvider = DEFAULT_PREFS.engineProvider;
+  if (!canUseEngine(engineDescriptor(state.prefs.engineProvider))) state.prefs.engineProvider = DEFAULT_PREFS.engineProvider;
   applyPreferences();
 }
 
 function updateIdentityUI() {
   const name = state.appUser?.username || "Guest";
+  const plan = hasPlus() ? "Plus active" : "Free";
   $("#profileName").textContent = name;
   $("#profileDialogName").textContent = name;
   $("#settingsAccountName").textContent = name;
   $("#settingsAccountDetail").textContent = state.appUser ? "This device profile keeps progress and preferences separate in this browser." : "Guest progress is saved only in this browser.";
+  $("#settingsPlanDetail").textContent = hasPlus()
+    ? "Plan: Plus. Lc0, Reckless, and master decks are available while the account API reports an active entitlement."
+    : "Plan: Free. Stockfish analysis stays local; Lc0, Reckless, and master decks require Plus.";
+  $("#profileDialogName").textContent = `${name} · ${plan}`;
   $("#logoutButton").textContent = state.appUser ? "Switch profile" : "Leave guest session";
 }
 
 function masterCard(player, directory = false) {
   return `<article class="master-card ${directory ? "directory-card" : ""}">
-    <div><h3>${escapeHtml(player.name || player.username)}</h3><p>chess.com/member/${escapeHtml(player.username)}</p></div>
+    <div><h3>${escapeHtml(player.name || player.username)}</h3><p>chess.com/member/${escapeHtml(player.username)} · Plus master deck</p></div>
     <div class="study-actions">
       <button type="button" data-master="${escapeHtml(player.username)}" data-master-name="${escapeHtml(player.name || player.username)}" data-focus="mistakes"><span>Learn from mistakes</span></button>
       <button type="button" data-master="${escapeHtml(player.username)}" data-master-name="${escapeHtml(player.name || player.username)}" data-focus="brilliancies"><span>Learn from brilliancies</span></button>
@@ -960,6 +1000,10 @@ function masterCard(player, directory = false) {
 
 function bindMasterActions(container) {
   container.querySelectorAll("[data-master]").forEach(button => button.addEventListener("click", () => {
+    if (!hasPlus()) {
+      showPricing("Master decks are a Replay Plus feature because they scan 100 grandmaster games per deck.");
+      return;
+    }
     startStudy(button.dataset.master, "chesscom", "latest100", button.dataset.masterName, button, button.dataset.focus);
   }));
 }
@@ -1006,8 +1050,11 @@ $("#brandHome").addEventListener("click", event => { event.preventDefault(); goH
 $("#navHome").addEventListener("click", goHome);
 $("#navMasters").addEventListener("click", showMasters);
 $("#navAnalysis").addEventListener("click", showAnalysis);
+$("#navPricing").addEventListener("click", () => showPricing());
 $("#navTraining").addEventListener("click", () => { if (state.games.length) enterTrainer(); });
 $("#gmSearch").addEventListener("input", event => renderGrandmasterDirectory(event.currentTarget.value));
+$("#pricingStartFree").addEventListener("click", () => { goHome(); $("#username").focus(); });
+$("#pricingUpgradeButton").addEventListener("click", () => showToast("Connect the account API to start checkout and return trusted Plus entitlements."));
 
 $$('[data-close]').forEach(button => button.addEventListener("click", () => $(`#${button.dataset.close}`).close()));
 

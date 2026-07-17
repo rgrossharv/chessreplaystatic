@@ -2,6 +2,15 @@ const ACTIVE_PROFILE_KEY = "replay:active-profile";
 const PROFILES_KEY = "replay:device-profiles";
 const GUEST_KEY = "replay:guest";
 
+export const FREE_ENTITLEMENTS = Object.freeze({
+  plan: "free",
+  premiumActive: false,
+  premiumSince: null,
+  premiumLapsedAt: null,
+  enginePolicy: "premium-analysis-stops-on-lapse",
+  cachedPremiumDecksRemainVisible: true,
+});
+
 function readJson(key, fallback) {
   try {
     return JSON.parse(localStorage.getItem(key)) ?? fallback;
@@ -19,6 +28,14 @@ function profileId() {
   return `device:${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}`;
 }
 
+function normalizeProfile(profile) {
+  if (!profile) return null;
+  return {
+    ...profile,
+    entitlements: { ...FREE_ENTITLEMENTS, ...(profile.entitlements || {}) },
+  };
+}
+
 export function cleanProfileName(value) {
   const name = String(value || "").trim();
   if (!/^[\p{L}\p{N}_ -]{2,32}$/u.test(name)) {
@@ -29,7 +46,7 @@ export function cleanProfileName(value) {
 
 export function createDeviceProfile(value) {
   const username = cleanProfileName(value);
-  const profile = { id: profileId(), username, storage: "device" };
+  const profile = { id: profileId(), username, storage: "device", entitlements: { ...FREE_ENTITLEMENTS } };
   const profiles = readJson(PROFILES_KEY, []);
   profiles.push(profile);
   writeJson(PROFILES_KEY, profiles.slice(-12));
@@ -39,7 +56,7 @@ export function createDeviceProfile(value) {
 }
 
 export function listDeviceProfiles() {
-  return readJson(PROFILES_KEY, []);
+  return readJson(PROFILES_KEY, []).map(normalizeProfile);
 }
 
 export function activateDeviceProfile(id) {
@@ -51,7 +68,7 @@ export function activateDeviceProfile(id) {
 }
 
 export function restoreProfileSession() {
-  const profile = readJson(ACTIVE_PROFILE_KEY, null);
+  const profile = normalizeProfile(readJson(ACTIVE_PROFILE_KEY, null));
   const guest = !profile && localStorage.getItem(GUEST_KEY) === "1";
   return { profile, guest };
 }
@@ -64,4 +81,8 @@ export function continueAsGuest() {
 export function clearProfileSession() {
   localStorage.removeItem(ACTIVE_PROFILE_KEY);
   localStorage.removeItem(GUEST_KEY);
+}
+
+export function hasPremiumEntitlement(profile) {
+  return Boolean(profile?.entitlements?.premiumActive);
 }

@@ -14,6 +14,7 @@
       <button id="navHome" class="nav-item active">Home</button>
       <button id="navMasters" class="nav-item">Masters</button>
       <button id="navAnalysis" class="nav-item">Analysis</button>
+      <button id="navPricing" class="nav-item">Pricing</button>
       <button id="navTraining" class="nav-item hidden">Training</button>
     </nav>
     <div class="top-actions">
@@ -36,14 +37,26 @@
           <button class="primary-button" type="submit"><span>Build deck</span></button>
         </form>
         <div class="search-meta"><span id="searchScopeText">Last 7 days, then latest 20 as fallback</span><span id="heroError" class="inline-error" role="alert"></span></div>
+        <div class="tier-summary" aria-label="Free and paid feature summary">
+          <article><span>Free</span><strong>Stockfish training</strong><small>Import your public games, analyze locally, and review mistakes on this device.</small></article>
+          <article class="plus"><span>Plus</span><strong>Lc0, Reckless, and master decks</strong><small>Premium engines, verified grandmaster decks, and account-backed entitlements.</small></article>
+        </div>
       </div>
 
     </section>
 
     <section id="mastersPage" class="masters-page hidden">
-      <div class="page-heading"><div><span class="eyebrow"><span></span> Grandmaster study</span><h1>Learn from the strongest players.</h1><p>Search 1,700+ verified Chess.com grandmasters, then turn their latest 100 games into mistake or brilliancy training.</p></div></div>
+      <div class="page-heading"><div><span class="eyebrow"><span></span> Plus master decks</span><h1>Learn from the strongest players.</h1><p>Master decks use verified Chess.com grandmaster accounts and scan each player's latest 100 public standard games for mistake or brilliancy training.</p></div></div>
       <section><div class="section-heading"><div><span class="panel-kicker">Featured grandmasters</span><h2>Start with a leading player</h2></div></div><div id="featuredMasters" class="master-grid master-grid-large"></div></section>
       <section class="gm-directory"><div class="section-heading directory-heading"><div><span class="panel-kicker">Chess.com titled directory</span><h2>All grandmasters</h2></div><label class="gm-search">Search<input id="gmSearch" type="search" placeholder="Player handle" autocomplete="off"></label></div><p id="gmDirectoryStatus" class="directory-status">Loading the grandmaster directory…</p><div id="gmDirectory" class="master-grid master-grid-directory"></div></section>
+    </section>
+
+    <section id="pricingPage" class="pricing-page hidden">
+      <div class="page-heading"><div><span class="eyebrow"><span></span> Pricing</span><h1>Know which engine you are using.</h1><p>Replay keeps the free browser tier useful, then reserves remote neural and high-compute analysis for Plus.</p></div></div>
+      <div class="pricing-grid">
+        <article class="pricing-card"><span class="plan-badge">Free</span><h2>Browser study</h2><p>For importing your own public games and building a local review deck.</p><ul><li>Chess.com and Lichess public-game import</li><li>Stockfish 18 running in your browser</li><li>Mistake, missed-win, missed-mate, and brilliancy lessons</li><li>Device profiles, preferences, cache, and review schedule in browser storage</li></ul><button id="pricingStartFree" class="secondary-button">Start free</button></article>
+        <article class="pricing-card featured-plan"><span class="plan-badge">Plus</span><h2>Premium analysis</h2><p>For stronger remote engines and curated master-study workflows.</p><ul><li>Lc0 cloud analysis through your configured compute gateway</li><li>Reckless cloud analysis through your configured compute gateway</li><li>Verified grandmaster master decks from the latest 100 public games</li><li>Previously analyzed Plus decks remain reviewable if a subscription lapses</li></ul><button id="pricingUpgradeButton" class="primary-button" type="button">Upgrade through account API</button></article>
+      </div>
     </section>
 
     <section id="analysisPage" class="analysis-page hidden">
@@ -105,9 +118,9 @@
         <section class="setting-section"><h3>Board colors</h3><div class="choice-grid"><button data-theme="brown"><span class="board-swatch brown"></span><strong>Walnut</strong></button><button data-theme="green"><span class="board-swatch green"></span><strong>Lichess green</strong></button><button data-theme="blue"><span class="board-swatch blue"></span><strong>Blue</strong></button><button data-theme="slate"><span class="board-swatch slate"></span><strong>Slate</strong></button></div></section>
         <section class="setting-section"><h3>Pieces</h3><div class="choice-grid piece-choices"><button data-pieces="cburnett"><img src="./pieces/cburnett/wN.svg" alt=""><strong>Cburnett</strong></button><button data-pieces="alpha"><img src="./pieces/alpha/wN.svg" alt=""><strong>Alpha</strong></button><button data-pieces="merida"><img src="./pieces/merida/wN.svg" alt=""><strong>Merida</strong></button></div></section>
       </div>
-      <div class="settings-pane hidden" data-settings-pane="analysis"><section class="setting-section"><h3>Analysis engine</h3><div id="engineChoices" class="engine-choices"></div><p class="setting-description engine-privacy-note">Remote endpoints authenticate the Replay user and keep provider credentials, billing, and quotas off the static site.</p></section></div>
+      <div class="settings-pane hidden" data-settings-pane="analysis"><section class="setting-section"><h3>Analysis engine</h3><div id="engineChoices" class="engine-choices"></div><p class="setting-description engine-privacy-note">Stockfish is free and local. Lc0 and Reckless require an active Plus entitlement from the account API; their endpoints keep provider credentials, billing, and quotas off the static site.</p></section></div>
       <div class="settings-pane hidden" data-settings-pane="effects"><section class="setting-section effects-settings"><div class="toggle-row"><div><h3>Motion and sounds</h3><p>Lightweight move animations and synthesized chess cues.</p></div><label class="switch"><input id="effectsToggle" type="checkbox" checked><span></span></label></div><label class="volume-row" for="masterVolume"><span>Master volume</span><input id="masterVolume" type="range" min="0" max="100" value="65"><output id="volumeOutput">65%</output></label><button id="testSoundButton" class="secondary-button">Play test sound</button></section><p class="license-note">Sounds are synthesized locally with Web Audio. The linked third-party sound-pack repository was not bundled because it does not provide a license.</p></div>
-      <div class="settings-pane hidden" data-settings-pane="account"><section class="setting-section"><h3 id="settingsAccountName">Guest</h3><p id="settingsAccountDetail" class="setting-description">Guest progress is saved only in this browser.</p><p class="setting-description sync-note">Cross-device accounts require the optional account API described in the project architecture.</p><button id="logoutButton" class="secondary-button">Leave session</button></section></div>
+      <div class="settings-pane hidden" data-settings-pane="account"><section class="setting-section"><h3 id="settingsAccountName">Guest</h3><p id="settingsAccountDetail" class="setting-description">Guest progress is saved only in this browser.</p><p id="settingsPlanDetail" class="setting-description plan-note">Plan: Free. Plus is required for Lc0, Reckless, and master decks.</p><p class="setting-description sync-note">Cross-device accounts, billing, and trusted entitlements require the optional account API described in the project architecture.</p><button id="logoutButton" class="secondary-button">Leave session</button></section></div>
     </div>
     <p class="license-note">Preferences are remembered for this Replay account. Lichess piece artwork is used under its open-source license.</p>
   </dialog>

@@ -2,6 +2,17 @@ name: Deploy Replay to GitHub Pages
 
 on:
   workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - "static/**"
+      - "tests/**"
+      - ".github/workflows/pages.yml"
+  pull_request:
+    paths:
+      - "static/**"
+      - "tests/**"
+      - ".github/workflows/pages.yml"
 
 permissions:
   contents: read
@@ -30,10 +41,11 @@ jobs:
           node --check static/lib/engine-providers.js
           node --check static/lib/game-import.js
           node --check static/lib/profile-store.js
+          node --check static/lib/puzzle-rules.js
           node --check static/lib/analysis-board.js
           node --check static/lib/brilliancy.js
           node --check static/lib/masters.js
-          node --test tests/brilliancy.test.mjs
+          node --test tests/*.test.mjs
       - name: Upload static site
         uses: actions/upload-pages-artifact@v4
         with:

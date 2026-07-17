@@ -15,6 +15,11 @@ Browser storage is appropriate for the analysis cache, UI preferences, and an
 offline/device profile. It is not the authority for purchased credits, engine
 credentials, or a cross-device identity.
 
+Device profiles include a local entitlement snapshot so the UI can clearly show
+Free versus Plus state, but the snapshot is only advisory. The account API is
+the source of truth for billing, subscriptions, quotas, and remote engine
+tokens.
+
 ## Optional account and sync API
 
 Use a hosted identity provider plus a durable database (for example, a small
@@ -36,6 +41,25 @@ For a GitHub Pages origin, prefer an OAuth/OIDC authorization-code flow with
 PKCE. Keep long-lived sessions in secure, HTTP-only cookies when the chosen
 domain layout permits it. Engine tokens should be short lived and narrowly
 scoped even when the account session is longer lived.
+
+### Entitlements and lapse behavior
+
+Replay uses these product rules:
+
+- Free users may import their own public games, run Stockfish in the browser,
+  review locally cached decks, and keep device-profile preferences.
+- Plus users may select configured Lc0 and Reckless gateways and build master
+  decks from verified Chess.com grandmaster accounts.
+- If a user upgrades mid-session, the existing deck stays intact. New analysis
+  requests can use Plus engines after `GET /v1/session` reports the entitlement
+  and `POST /v1/engine-token` succeeds.
+- If Plus lapses, previously analyzed Plus puzzles remain visible and reviewable
+  because the deck is user study history. New remote analysis, wrong-move
+  remote evaluation, and new master-deck imports are blocked until Plus returns.
+
+Persist entitlement state separately from review cards. Review cards should not
+be deleted or rewritten when a subscription changes; only the ability to create
+new Plus analysis is gated.
 
 ## Optional compute gateway
 

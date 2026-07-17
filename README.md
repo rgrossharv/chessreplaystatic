@@ -29,9 +29,9 @@ Do not expose this development server directly to the public internet.
 ## Deploy to GitHub Pages
 
 The included `.github/workflows/pages.yml` can publish the contents of `static/`
-without a build step. It is intentionally manual while paid engine access is
-being prepared. When the product is ready, choose **GitHub Actions** in the
-repository's **Settings → Pages** and run the workflow manually.
+without a build step. It runs on pull requests for validation, deploys on pushes
+to `main`, and still supports manual `workflow_dispatch` runs. Choose **GitHub
+Actions** in the repository's **Settings → Pages** before the first deployment.
 
 All application and asset URLs are relative, so the site works under the
 `/chessreplaystatic/` project path as well as at a custom domain.
@@ -60,8 +60,16 @@ boundaries are documented in [`docs/architecture.md`](docs/architecture.md).
 
 ## How training works
 
-- Replay uses games played in the last seven days. If there are none, it falls
-  back to the latest twenty games. Master decks use their latest 100 games.
+- Free Replay uses games played in the last seven days. If there are none, it
+  falls back to the latest twenty games and tells the user which fallback was
+  used. If an account has fewer than twenty total public standard games, Replay
+  imports all available games and says so explicitly. Missing usernames and
+  accounts with no usable public games are separate error states.
+- Free analysis uses Stockfish 18 in the visitor's browser. Plus analysis uses
+  configured Lc0 or Reckless compute gateways.
+- Master decks are a Plus feature. A master deck is built from a verified
+  Chess.com grandmaster account in the titled-player directory or the featured
+  master list, scanning that player's latest 100 public standard games.
 - A position becomes a puzzle when the played move loses at least three pawns,
   misses a forced mate, or misses a clearly winning position.
 - A move becomes a brilliancy lesson only when it offers meaningful material,
@@ -81,6 +89,39 @@ boundaries are documented in [`docs/architecture.md`](docs/architecture.md).
   and touch.
 - Analysis results are cached in the browser by account, source, player, game,
   engine, and analysis version.
+
+## Pricing and subscription behavior
+
+Replay exposes the product boundary in the app:
+
+| Tier | Included |
+| --- | --- |
+| Free | Public-game import, local Stockfish 18 analysis, browser device profiles, review scheduling, and cached local decks. |
+| Plus | Lc0 cloud analysis, Reckless cloud analysis, and master decks from verified grandmaster accounts. |
+
+The static app can show and cache entitlement state, but it is not the authority
+for billing. The account API must decide whether a user is Plus, mint short-lived
+engine tokens, and enforce quotas server-side.
+
+If a user subscribes mid-session, the current Stockfish deck remains available;
+new analysis can use Lc0 or Reckless after the account API returns a Plus
+entitlement and engine token. If a subscription lapses, previously analyzed Plus
+content remains visible and reviewable in the user's deck, but new Plus engine
+analysis and new master-deck imports are blocked until the entitlement returns.
+
+## Browser and mobile support
+
+Replay is designed for current evergreen browsers:
+
+| Browser | Support target | Notes |
+| --- | --- | --- |
+| Chrome / Edge | Current and previous two major versions | Best target for Web Worker and WASM Stockfish. |
+| Firefox | Current and previous two major versions | Web Worker and WASM Stockfish supported. |
+| Safari / iOS Safari | 16.4+ | Older Safari builds are the highest-risk target for WASM/worker behavior. |
+| Mobile browsers | Current iOS Safari and Android Chrome | Board, analysis, and review layouts collapse to single-column touch-friendly views. |
+
+If Stockfish cannot start, users should be shown the failure instead of silently
+falling back to an empty analysis state.
 
 ## Configure remote engines
 
@@ -121,3 +162,14 @@ that token from `sessionStorage` under `replay:engine-access-token`.
   `static/vendor/stockfish/COPYING.txt`.
 - Piece artwork: Cburnett, Alpha, and Merida sets from Lichess. The Lichess
   license is included at `static/pieces/LICHESS-LICENSE.txt`.
+- Optional Plus engine gateway: Lc0 source is available at
+  <https://github.com/LeelaChessZero/lc0> under GPL-3.0-or-later.
+- Optional Plus engine gateway: Reckless source is available at
+  <https://github.com/codedeliveryservice/Reckless> under AGPL-3.0.
+
+## Replay license
+
+Replay's original website and application code is source-available under the
+custom [`LICENSE`](LICENSE): personal, non-commercial use of unmodified copies is
+allowed; modification, redistribution, and commercial use require separate
+permission. This is not an OSI open-source license.
