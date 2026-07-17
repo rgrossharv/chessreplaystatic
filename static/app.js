@@ -1,13 +1,23 @@
-import { Chess } from "/vendor/chess/chess.js";
+import { Chess } from "./vendor/chess/chess.js";
+import { importGames, getGameDetail as buildGameDetail } from "./lib/game-import.js";
+import { createEngine, engineDescriptor, engineDescriptors, SEARCH_DEPTH } from "./lib/engine-providers.js";
+import { activateDeviceProfile, clearProfileSession, continueAsGuest, createDeviceProfile, listDeviceProfiles, restoreProfileSession } from "./lib/profile-store.js";
 
-const ENGINE_VERSION = "stockfish-18-lite-single";
-const ANALYSIS_VERSION = 6;
-const SEARCH_DEPTH = 12;
+const ANALYSIS_VERSION = 7;
 const MIN_LOSS = 300;
 const DAY = 24 * 60 * 60 * 1000;
+const DEFAULT_PREFS = {
+  siteTheme: "light",
+  theme: "brown",
+  pieces: "cburnett",
+  effectsEnabled: true,
+  masterVolume: .65,
+  engineProvider: "stockfish-browser",
+};
 
 const $ = selector => document.querySelector(selector);
 const $$ = selector => [...document.querySelectorAll(selector)];
+const assetUrl = path => new URL(path, import.meta.url).href;
 
 const state = {
   appUser: null,
@@ -26,7 +36,7 @@ const state = {
   selectedSquare: null,
   legalMoves: [],
   phase: "idle",
-  prefs: { siteTheme: "light", theme: "brown", pieces: "cburnett", effectsEnabled: true, masterVolume: .65 },
+  prefs: { ...DEFAULT_PREFS },
   sessionSeen: new Set(),
   analyzing: false,
   pointerDrag: null,
@@ -38,96 +48,11 @@ const state = {
   audioContext: null,
 };
 
-class BrowserStockfish {
-  constructor() {
-    this.worker = new Worker("/vendor/stockfish/stockfish-18-lite-single.js");
-    this.waiters = [];
-    this.pending = null;
-    this.worker.onmessage = event => this.onMessage(String(event.data ?? ""));
-    this.worker.onerror = error => {
-      if (this.pending) this.pending.reject(new Error("Stockfish could not start in this browser."));
-      console.error(error);
-    };
-  }
-
-  send(command) { this.worker.postMessage(command); }
-
-  waitFor(token, timeout = 30000) {
-    return new Promise((resolve, reject) => {
-      const timer = setTimeout(() => reject(new Error(`Stockfish timed out waiting for ${token}.`)), timeout);
-      this.waiters.push({ token, resolve: value => { clearTimeout(timer); resolve(value); } });
-    });
-  }
-
-  async init() {
-    this.send("uci");
-    await this.waitFor("uciok");
-    this.send("setoption name Hash value 32");
-    this.send("isready");
-    await this.waitFor("readyok");
-  }
-
-  onMessage(payload) {
-    for (const line of payload.split(/\r?\n/).map(value => value.trim()).filter(Boolean)) {
-      const waiter = this.waiters.find(item => line.includes(item.token));
-      if (waiter) {
-        this.waiters = this.waiters.filter(item => item !== waiter);
-        waiter.resolve(line);
-      }
-      if (!this.pending) continue;
-      if (line.startsWith("info ") && line.includes(" score ")) {
-        const parsed = parseInfo(line);
-        if (parsed && parsed.depth >= this.pending.result.depth) this.pending.result = parsed;
-      }
-      if (line.startsWith("bestmove ")) {
-        const bestmove = line.split(/\s+/)[1];
-        const pending = this.pending;
-        this.pending = null;
-        pending.resolve({ ...pending.result, bestmove });
-      }
-    }
-  }
-
-  evaluate(fen, searchMove = null) {
-    return new Promise((resolve, reject) => {
-      if (this.pending) return reject(new Error("Stockfish received overlapping searches."));
-      this.pending = { resolve, reject, result: { depth: 0, cp: 0, mate: null, pv: [] } };
-      this.send(`position fen ${fen}`);
-      this.send(`go depth ${SEARCH_DEPTH}${searchMove ? ` searchmoves ${searchMove}` : ""}`);
-    });
-  }
-
-  close() {
-    this.send("quit");
-    this.worker.terminate();
-  }
-}
-
-function parseInfo(line) {
-  const depth = Number(line.match(/\bdepth (\d+)/)?.[1] || 0);
-  const score = line.match(/\bscore (cp|mate) (-?\d+)/);
-  if (!score) return null;
-  const pvText = line.match(/\bpv (.+)$/)?.[1] || "";
-  return {
-    depth,
-    cp: score[1] === "cp" ? Number(score[2]) : null,
-    mate: score[1] === "mate" ? Number(score[2]) : null,
-    pv: pvText.split(/\s+/).filter(Boolean),
-  };
-}
-
-async function request(url, options) {
-  const response = await fetch(url, options);
-  const data = await response.json().catch(() => ({}));
-  if (!response.ok) throw new Error(data.error || "Request failed.");
-  return data;
-}
-
 function escapeHtml(value) {
   return String(value ?? "").replace(/[&<>'"]/g, char => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", "'": "&#39;", '"': "&quot;" }[char]));
 }
 
-function identityKey() { return state.appUser?.username?.toLowerCase() || "guest"; }
+function identityKey() { return state.appUser?.id || "guest"; }
 function analysisKey() { return `replay:analysis:${state.source}:${state.username.toLowerCase()}`; }
 function scheduleKey() { return `replay:schedule:${identityKey()}:${state.source}:${state.username.toLowerCase()}`; }
 function prefsKey() { return `replay:prefs:${identityKey()}`; }
@@ -155,7 +80,7 @@ async function startStudy(username, source, scope = "recent", displayName = user
   const buttonLabel = button?.querySelector("span:first-child");
   if (buttonLabel) buttonLabel.textContent = "Loading games…";
   try {
-    const data = await request(`/api/games?username=${encodeURIComponent(username)}&source=${encodeURIComponent(source)}&scope=${encodeURIComponent(scope)}`);
+    const data = await importGames({ username, source, scope });
     if (!data.games.length) throw new Error("No public games were found for that account.");
     state.username = username;
     state.displayName = displayName;
@@ -209,11 +134,14 @@ async function buildDeck(force = false) {
   state.analyzing = true;
   state.puzzles = [];
   state.sessionSeen.clear();
+  const provider = engineDescriptor(state.prefs.engineProvider);
   showAnswer("thinking");
+  $("#thinkingEngine").textContent = provider.name;
+  $("#thinkingDetail").textContent = provider.id === "stockfish-browser" ? "Your browser is evaluating the selected games." : "Your configured compute service is evaluating the selected games.";
   $("#analysisBanner").classList.remove("hidden");
   $("#analysisProgress").style.width = "0%";
-  $("#analysisTitle").textContent = "Preparing Stockfish 18…";
-  $("#analysisDetail").textContent = "Analysis runs entirely on this device.";
+  $("#analysisTitle").textContent = `Preparing ${provider.name}…`;
+  $("#analysisDetail").textContent = provider.detail;
 
   const cache = loadJson(analysisKey(), { version: ANALYSIS_VERSION, games: {} });
   if (cache.version !== ANALYSIS_VERSION) Object.assign(cache, { version: ANALYSIS_VERSION, games: {} });
@@ -222,17 +150,18 @@ async function buildDeck(force = false) {
   try {
     for (const game of selectedGames) {
       const detail = await getGameDetail(game.id);
-      let gamePuzzles = !force ? cache.games[game.id]?.puzzles : null;
+      const cached = cache.games[game.id];
+      let gamePuzzles = !force && cached?.engine === provider.fingerprint ? cached.puzzles : null;
       if (!gamePuzzles) {
         if (!engine) {
-          engine = new BrowserStockfish();
+          engine = createEngine(provider.id);
           await engine.init();
         }
-        $("#analysisTitle").textContent = `Finding important mistakes vs ${game.opponent}`;
+        $("#analysisTitle").textContent = `${provider.name} · finding mistakes vs ${game.opponent}`;
         gamePuzzles = await analyzeGameInBrowser(engine, detail, game, (current, total) => {
           $("#analysisDetail").textContent = `Move ${current} of ${total} · depth ${SEARCH_DEPTH}`;
         });
-        cache.games[game.id] = { engine: ENGINE_VERSION, analyzedAt: Date.now(), puzzles: gamePuzzles };
+        cache.games[game.id] = { engine: provider.fingerprint, analyzedAt: Date.now(), puzzles: gamePuzzles };
         saveJson(analysisKey(), cache);
       }
       state.puzzles.push(...gamePuzzles);
@@ -240,7 +169,7 @@ async function buildDeck(force = false) {
       $("#analysisProgress").style.width = `${Math.round((finished / selectedGames.length) * 100)}%`;
     }
     state.puzzles.sort((a, b) => b.loss - a.loss);
-    $("#engineName").textContent = "Stockfish 18 · analysis ready";
+    $("#engineName").textContent = `${provider.name} · analysis ready`;
     updateStats();
     if (state.puzzles.length) await showNextPuzzle();
     else showAnswer("empty");
@@ -256,7 +185,7 @@ async function buildDeck(force = false) {
 }
 
 async function getGameDetail(id) {
-  if (!state.details.has(id)) state.details.set(id, await request(`/api/game/${id}`));
+  if (!state.details.has(id)) state.details.set(id, buildGameDetail(id));
   return state.details.get(id);
 }
 
@@ -284,7 +213,7 @@ async function analyzeGameInBrowser(engine, detail, game, onProgress) {
         let category = "Blunder";
         if (missedMate) category = "Missed mate";
         else if (bestValue >= 300) category = "Missed win";
-        puzzles.push(makePuzzle(game, move, fen, category, loss, best, bestSan, played));
+        puzzles.push(makePuzzle(game, move, fen, category, loss, best, bestSan, played, engine.descriptor));
       }
     }
 
@@ -292,7 +221,7 @@ async function analyzeGameInBrowser(engine, detail, game, onProgress) {
   return puzzles;
 }
 
-function makePuzzle(game, move, fen, category, loss, best, bestSan, played) {
+function makePuzzle(game, move, fen, category, loss, best, bestSan, played, provider) {
   return {
     id: `${game.id}:${move.ply}:${category.toLowerCase().replaceAll(" ", "-")}`,
     gameId: game.id,
@@ -308,6 +237,7 @@ function makePuzzle(game, move, fen, category, loss, best, bestSan, played) {
     played: move.uci,
     playedSan: move.san,
     playedEval: formatEval(played),
+    engineName: provider?.name || "Engine",
     game: { ...game },
   };
 }
@@ -421,7 +351,7 @@ function renderBoard(lastMove = null) {
     const pieceName = piece ? `${piece === piece.toUpperCase() ? "w" : "b"}${piece.toUpperCase()}` : null;
     html.push(`<button class="square ${dark ? "dark" : ""} ${state.selectedSquare === square ? "selected" : ""} ${legal ? `legal ${legal.captured ? "capture" : ""}` : ""} ${lastSquares.includes(square) ? "last" : ""}" data-square="${square}" aria-label="${square}">
       ${column === 0 ? `<span class="coord rank">${rank}</span>` : ""}${row === 7 ? `<span class="coord file">${file}</span>` : ""}
-      ${pieceName ? `<img class="piece-image" draggable="false" src="/pieces/${state.prefs.pieces}/${pieceName}.svg" alt="">` : ""}
+      ${pieceName ? `<img class="piece-image" draggable="false" src="${assetUrl(`./pieces/${state.prefs.pieces}/${pieceName}.svg`)}" alt="">` : ""}
     </button>`);
   }));
   $("#board").innerHTML = html.join("");
@@ -555,9 +485,9 @@ function checkAttempt(move) {
     playSound("wrong");
     state.phase = "wrong";
     setBoardMessage("Wrong move. Try the position again or reveal the solution.", "wrong");
-    $("#wrongText").textContent = `${move.san} is legal, but it misses Stockfish's stronger move.`;
+    $("#wrongText").textContent = `${move.san} is legal, but it misses ${engineDescriptor(state.prefs.engineProvider).name}'s stronger move.`;
     $("#attemptMove").textContent = move.san;
-    $("#attemptEval").textContent = "Stockfish is evaluating…";
+    $("#attemptEval").textContent = `${engineDescriptor(state.prefs.engineProvider).name} is evaluating…`;
     showAnswer("wrong");
     evaluateWrongMove(attempted, move.san);
   }
@@ -567,7 +497,7 @@ async function getPracticeEngine() {
   if (state.practiceEngine) return state.practiceEngine;
   if (!state.practiceEnginePromise) {
     state.practiceEnginePromise = (async () => {
-      const engine = new BrowserStockfish();
+      const engine = createEngine(state.prefs.engineProvider);
       await engine.init();
       state.practiceEngine = engine;
       return engine;
@@ -588,7 +518,7 @@ function evaluateWrongMove(uci, san) {
     const result = await engine.evaluate(fen, uci);
     if (token === state.wrongEvalToken && state.current?.id === puzzleId && state.phase === "wrong") {
       $("#attemptMove").textContent = san;
-      $("#attemptEval").textContent = `Stockfish ${formatEval(result)}`;
+      $("#attemptEval").textContent = `${engineDescriptor(state.prefs.engineProvider).name} ${formatEval(result)}`;
     }
   }).catch(error => {
     console.error(error);
@@ -617,9 +547,11 @@ function revealSolution(correct) {
   $("#playedLabel").textContent = "Played in the game";
   $("#bestLabel").textContent = "Best move";
   $("#playedMove").textContent = state.current.playedSan;
-  $("#playedEval").textContent = `Stockfish ${state.current.playedEval}`;
+  const providerName = state.current.engineName || engineDescriptor(state.prefs.engineProvider).name;
+  $("#playedEval").textContent = `${providerName} ${state.current.playedEval}`;
   $("#bestMove").textContent = state.current.bestSan;
-  $("#bestEval").textContent = `Stockfish ${state.current.bestEval}`;
+  $("#bestEval").textContent = `${providerName} ${state.current.bestEval}`;
+  $("#solutionEngineLabel").textContent = `${providerName} continuation`;
   $("#solutionLine").textContent = state.current.bestPv || state.current.bestSan;
   showAnswer("solution");
   renderNotation(state.details.get(state.current.gameId), state.current, true);
@@ -748,7 +680,27 @@ function applyPreferences() {
   $$('[data-site-theme]').forEach(button => button.classList.toggle("active", button.dataset.siteTheme === state.prefs.siteTheme));
   $$('[data-theme]').forEach(button => button.classList.toggle("active", button.dataset.theme === state.prefs.theme));
   $$('[data-pieces]').forEach(button => button.classList.toggle("active", button.dataset.pieces === state.prefs.pieces));
+  $$('[data-engine-provider]').forEach(button => button.classList.toggle("active", button.dataset.engineProvider === state.prefs.engineProvider));
+  const provider = engineDescriptor(state.prefs.engineProvider);
+  if (!state.analyzing) $("#engineName").textContent = provider.id === "stockfish-browser" ? `${provider.name} loads in your browser` : provider.name;
   if (state.puzzleChess) renderBoard();
+}
+
+function renderEngineChoices() {
+  $("#engineChoices").innerHTML = engineDescriptors().map(provider => `<button type="button" data-engine-provider="${provider.id}" ${provider.configured ? "" : "disabled"}>
+    <span><strong>${escapeHtml(provider.name)}</strong><small>${escapeHtml(provider.detail || "Remote analysis")}</small></span>
+    <em>${provider.configured ? (provider.id === "stockfish-browser" ? "Included" : "Configured") : "Endpoint needed"}</em>
+  </button>`).join("");
+  $$('[data-engine-provider]').forEach(button => button.addEventListener("click", () => {
+    if (button.disabled || button.dataset.engineProvider === state.prefs.engineProvider) return;
+    state.practiceEngine?.close();
+    state.practiceEngine = null;
+    state.practiceEnginePromise = null;
+    state.prefs.engineProvider = button.dataset.engineProvider;
+    savePreferences();
+    showToast(`${engineDescriptor(state.prefs.engineProvider).name} selected for new analysis.`);
+  }));
+  applyPreferences();
 }
 
 $("#settingsButton").addEventListener("click", () => {
@@ -836,14 +788,7 @@ $$('[data-settings-tab]').forEach(button => button.addEventListener("click", () 
   $$('[data-settings-pane]').forEach(pane => pane.classList.toggle("hidden", pane.dataset.settingsPane !== button.dataset.settingsTab));
 }));
 
-$$('[data-auth-tab]').forEach(button => button.addEventListener("click", () => {
-  $$('[data-auth-tab]').forEach(tab => tab.classList.toggle("active", tab === button));
-  $("#registerForm").classList.toggle("hidden", button.dataset.authTab !== "register");
-  $("#loginForm").classList.toggle("hidden", button.dataset.authTab !== "login");
-  $("#authError").textContent = "";
-}));
-
-async function submitAuth(event, action) {
+function submitProfile(event) {
   event.preventDefault();
   const form = event.currentTarget;
   const submit = form.querySelector("button");
@@ -851,10 +796,8 @@ async function submitAuth(event, action) {
   submit.disabled = true;
   $("#authError").textContent = "";
   try {
-    const data = await request(`/api/auth/${action}`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(values) });
-    state.appUser = data.user;
+    state.appUser = createDeviceProfile(values.username);
     state.guest = false;
-    localStorage.removeItem("replay:guest");
     loadAccountPreferences();
     updateIdentityUI();
     $("#authDialog").close();
@@ -865,12 +808,28 @@ async function submitAuth(event, action) {
   }
 }
 
-$("#registerForm").addEventListener("submit", event => submitAuth(event, "register"));
-$("#loginForm").addEventListener("submit", event => submitAuth(event, "login"));
+function renderProfileChoices() {
+  const profiles = listDeviceProfiles();
+  $("#savedProfiles").classList.toggle("hidden", !profiles.length);
+  $("#profileChoices").innerHTML = profiles.map(profile => `<button type="button" data-profile-id="${escapeHtml(profile.id)}"><span>${escapeHtml(profile.username)}</span><small>Device profile</small></button>`).join("");
+  $$('[data-profile-id]').forEach(button => button.addEventListener("click", () => {
+    try {
+      state.appUser = activateDeviceProfile(button.dataset.profileId);
+      state.guest = false;
+      loadAccountPreferences();
+      updateIdentityUI();
+      $("#authDialog").close();
+    } catch (error) {
+      $("#authError").textContent = error.message;
+    }
+  }));
+}
+
+$("#profileForm").addEventListener("submit", submitProfile);
 $("#guestButton").addEventListener("click", () => {
   state.appUser = null;
   state.guest = true;
-  localStorage.setItem("replay:guest", "1");
+  continueAsGuest();
   loadAccountPreferences();
   updateIdentityUI();
   $("#authDialog").close();
@@ -880,19 +839,20 @@ $("#authDialog").addEventListener("cancel", event => {
   if (!state.appUser && !state.guest) event.preventDefault();
 });
 
-$("#logoutButton").addEventListener("click", async () => {
-  if (state.appUser) await request("/api/auth/logout", { method: "POST" }).catch(() => {});
+$("#logoutButton").addEventListener("click", () => {
   state.appUser = null;
   state.guest = false;
-  localStorage.removeItem("replay:guest");
+  clearProfileSession();
   $("#settingsDialog").close();
   goHome();
   updateIdentityUI();
+  renderProfileChoices();
   $("#authDialog").showModal();
 });
 
 function loadAccountPreferences() {
-  state.prefs = { siteTheme: "light", theme: "brown", pieces: "cburnett", effectsEnabled: true, masterVolume: .65, ...loadJson(prefsKey(), {}) };
+  state.prefs = { ...DEFAULT_PREFS, ...loadJson(prefsKey(), {}) };
+  if (!engineDescriptor(state.prefs.engineProvider).configured) state.prefs.engineProvider = DEFAULT_PREFS.engineProvider;
   applyPreferences();
 }
 
@@ -902,8 +862,8 @@ function updateIdentityUI() {
   $("#profileName").textContent = name;
   $("#profileDialogName").textContent = name;
   $("#settingsAccountName").textContent = name;
-  $("#settingsAccountDetail").textContent = state.appUser ? "Progress and preferences are stored under this local account." : "Guest progress is saved only in this browser.";
-  $("#logoutButton").textContent = state.appUser ? "Sign out" : "Leave guest session";
+  $("#settingsAccountDetail").textContent = state.appUser ? "This device profile keeps progress and preferences separate in this browser." : "Guest progress is saved only in this browser.";
+  $("#logoutButton").textContent = state.appUser ? "Switch profile" : "Leave guest session";
 }
 
 const masterNames = { MagnusCarlsen: "Magnus Carlsen", Hikaru: "Hikaru Nakamura", GothamChess: "Levy Rozman", fabianocaruana: "Fabiano Caruana" };
@@ -936,17 +896,12 @@ function showToast(message) {
 
 const lastUser = localStorage.getItem("replay:last-user");
 if (lastUser) $("#username").value = lastUser;
-request("/api/status").then(status => $("#engineName").textContent = status.engine).catch(() => {});
-request("/api/auth/me").then(data => {
-  state.appUser = data.user || null;
-  state.guest = !state.appUser && localStorage.getItem("replay:guest") === "1";
-  loadAccountPreferences();
-  updateIdentityUI();
-  if (!state.appUser && !state.guest) $("#authDialog").showModal();
-}).catch(() => {
-  state.guest = localStorage.getItem("replay:guest") === "1";
-  loadAccountPreferences();
-  updateIdentityUI();
-  if (!state.guest) $("#authDialog").showModal();
-});
+const restored = restoreProfileSession();
+state.appUser = restored.profile;
+state.guest = restored.guest;
+loadAccountPreferences();
+renderEngineChoices();
+renderProfileChoices();
+updateIdentityUI();
+if (!state.appUser && !state.guest) $("#authDialog").showModal();
 renderBoard();

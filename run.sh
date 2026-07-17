@@ -2,12 +2,13 @@
 set -euo pipefail
 cd "$(dirname "$0")"
 
-if [[ ! -x .venv/bin/python ]]; then
-  python3 -m venv .venv
-fi
+replay_host="${REPLAY_HOST:-localhost}"
+replay_port="${REPLAY_PORT:-47831}"
 
-if ! .venv/bin/python -c "import chess" 2>/dev/null; then
-  .venv/bin/pip install -r requirements.txt
-fi
+case "${replay_host}" in
+  all|ALL|any|ANY) replay_host="0.0.0.0" ;;
+esac
 
-exec .venv/bin/python app.py
+echo "Replay is ready at http://localhost:${replay_port}"
+echo "Static mode: game import, PGN parsing, and Stockfish run in the browser"
+exec python3 -m http.server "${replay_port}" --bind "${replay_host}" --directory static
