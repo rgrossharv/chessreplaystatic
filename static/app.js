@@ -2,11 +2,11 @@ import { Chess } from "./vendor/chess/chess.js";
 import { importGames, getGameDetail as buildGameDetail } from "./lib/game-import.js";
 import { createEngine, engineDescriptor, engineDescriptors, SEARCH_DEPTH } from "./lib/engine-providers.js";
 import { activateDeviceProfile, clearProfileSession, continueAsGuest, createDeviceProfile, listDeviceProfiles, restoreProfileSession } from "./lib/profile-store.js";
-import { alternativeMoves, explainBrilliancy, findSacrificeCandidate, pvMaterialInvestment } from "./lib/brilliancy.js";
+import { alternativeMoves, analyzeSacrificeLine, BRILLIANCY_THRESHOLDS, explainBrilliancy, findSacrificeCandidate, isSoundBrilliancy } from "./lib/brilliancy.js";
 import { FEATURED_MASTERS, fetchGrandmasterHandles } from "./lib/masters.js";
 import { initAnalysisBoard } from "./lib/analysis-board.js";
 
-const ANALYSIS_VERSION = 8;
+const ANALYSIS_VERSION = 9;
 const MIN_LOSS = 300;
 const DAY = 24 * 60 * 60 * 1000;
 const DEFAULT_PREFS = {
@@ -79,7 +79,9 @@ $("#importForm").addEventListener("submit", async event => {
   event.preventDefault();
   const username = $("#username").value.trim();
   const button = event.currentTarget.querySelector("button");
-  await startStudy(username, $("#gameSource").value, "recent", username, button);
+  const focus = $("#studyFocus").value;
+  const scope = focus === "brilliancies" ? "latest100" : "recent";
+  await startStudy(username, $("#gameSource").value, scope, username, button, focus);
 });
 
 async function startStudy(username, source, scope = "recent", displayName = username, button = null, focus = "all") {
@@ -120,6 +122,7 @@ async function startStudy(username, source, scope = "recent", displayName = user
 
 function enterTrainer() {
   document.body.classList.add("puzzle-room");
+  document.body.classList.remove("analysis-room");
   hideMainViews();
   $("#trainer").classList.remove("hidden");
   $("#navTraining").classList.remove("hidden");
@@ -143,6 +146,7 @@ function hideMainViews() {
 
 function goHome() {
   document.body.classList.remove("puzzle-room");
+  document.body.classList.remove("analysis-room");
   hideMainViews();
   $("#hero").classList.remove("hidden");
   setActiveNav("home");
@@ -150,6 +154,7 @@ function goHome() {
 
 function showMasters() {
   document.body.classList.remove("puzzle-room");
+  document.body.classList.remove("analysis-room");
   hideMainViews();
   $("#mastersPage").classList.remove("hidden");
   setActiveNav("masters");
@@ -158,6 +163,7 @@ function showMasters() {
 
 function showAnalysis() {
   document.body.classList.remove("puzzle-room");
+  document.body.classList.add("analysis-room");
   hideMainViews();
   $("#analysisPage").classList.remove("hidden");
   setActiveNav("analysis");
@@ -165,6 +171,7 @@ function showAnalysis() {
     generalAnalysisBoard = initAnalysisBoard({
       getPieceSet: () => state.prefs.pieces,
       getEngineProvider: () => state.prefs.engineProvider,
+      onSound: playSound,
     });
   } else generalAnalysisBoard.refresh();
   applyPreferences();
@@ -260,19 +267,20 @@ async function analyzeGameInBrowser(engine, detail, game, onProgress) {
     const playedValue = played ? scoreValue(played) : bestValue;
     const loss = Math.max(0, bestValue - playedValue);
 
-    if (sacrifice && loss <= 35 && playedValue >= -50) {
+    const keepsWinningMate = best.mate !== null && best.mate > 0 && played?.mate !== null && played.mate > 0;
+    const plausibleBrilliancy = keepsWinningMate || (loss <= BRILLIANCY_THRESHOLDS.maximumLoss && playedValue >= BRILLIANCY_THRESHOLDS.minimumEvaluation);
+    if (sacrifice && plausibleBrilliancy) {
       const alternatives = alternativeMoves(fen, move.uci);
       const alternative = alternatives.length ? await engine.evaluate(fen, alternatives) : null;
       const alternativeValue = alternative ? scoreValue(alternative) : -100000;
-      const competitive = alternativeValue < 700;
-      const endgameOnlyMove = sacrifice.pieceCount > 12 || playedValue - alternativeValue >= 80;
-      if (competitive && endgameOnlyMove) {
+      const qualifies = isSoundBrilliancy({ loss, playedValue, alternativeValue, pieceCount: sacrifice.pieceCount, keepsWinningMate });
+      if (qualifies) {
         const brilliantResult = { ...played, bestmove: move.uci, pv: played?.pv?.[0]?.slice(0, 4) === move.uci.slice(0, 4) ? played.pv : [move.uci, ...(played?.pv || [])] };
-        const pvInvestment = pvMaterialInvestment(fen, brilliantResult.pv, sacrifice.moverColor);
+        const sacrificeLine = analyzeSacrificeLine(fen, brilliantResult.pv, sacrifice.moverColor);
         const brilliantSan = findVerboseMove(new Chess(fen), move.uci)?.san || move.san;
         puzzles.push(makePuzzle(game, move, fen, "Brilliancy", loss, brilliantResult, brilliantSan, brilliantResult, engine.descriptor, {
-          impact: Math.max(sacrifice.investment, pvInvestment),
-          explanation: explainBrilliancy(sacrifice, pvInvestment),
+          impact: Math.max(sacrifice.investment, sacrificeLine.investment),
+          explanation: explainBrilliancy(sacrifice, sacrificeLine),
         }));
       }
     }
@@ -746,7 +754,7 @@ $("#startAnalysisButton").addEventListener("click", () => buildDeck(true));
 function applyPreferences() {
   document.body.dataset.siteTheme = state.prefs.siteTheme || "light";
   $("#boardShell").className = `board-shell theme-${state.prefs.theme}`;
-  $("#analysisBoardShell").className = `analysis-board-shell theme-${state.prefs.theme}`;
+  $("#analysisBoardShell").className = `board-shell analysis-board-shell theme-${state.prefs.theme}`;
   document.body.classList.toggle("reduce-effects", !state.prefs.effectsEnabled);
   $("#effectsToggle").checked = state.prefs.effectsEnabled !== false;
   $("#masterVolume").value = Math.round((state.prefs.masterVolume ?? .65) * 100);
@@ -986,6 +994,12 @@ async function loadGrandmasterDirectory() {
 
 $("#gameSource").addEventListener("change", event => {
   $("#sourcePrefix").textContent = event.currentTarget.value === "lichess" ? "lichess.org/@/" : "chess.com/";
+});
+
+$("#studyFocus").addEventListener("change", event => {
+  $("#searchScopeText").textContent = event.currentTarget.value === "brilliancies"
+    ? "Search your latest 100 games for sound sacrifices"
+    : "Last 7 days, then latest 20 as fallback";
 });
 
 $("#brandHome").addEventListener("click", event => { event.preventDefault(); goHome(); });

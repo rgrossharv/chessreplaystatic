@@ -29,7 +29,7 @@ function pvToSan(fen, pv) {
   return line.join(" ");
 }
 
-export function initAnalysisBoard({ getPieceSet, getEngineProvider }) {
+export function initAnalysisBoard({ getPieceSet, getEngineProvider, onSound = () => {} }) {
   const $ = selector => document.querySelector(selector);
   const state = {
     chess: new Chess(),
@@ -85,9 +85,9 @@ export function initAnalysisBoard({ getPieceSet, getEngineProvider }) {
       const pieceName = piece ? `${piece.color}${piece.type.toUpperCase()}` : null;
       const dark = ((file.charCodeAt(0) - 97) + rank) % 2 === 1;
       const legal = targets.get(square);
-      html.push(`<button type="button" class="analysis-square ${dark ? "dark" : ""} ${state.selectedSquare === square ? "selected" : ""} ${legal ? `legal ${legal.captured ? "capture" : ""}` : ""} ${last.includes(square) ? "last" : ""}" data-analysis-square="${square}" aria-label="${square}">
+      html.push(`<button type="button" class="square analysis-square ${dark ? "dark" : ""} ${state.selectedSquare === square ? "selected" : ""} ${legal ? `legal ${legal.captured ? "capture" : ""}` : ""} ${last.includes(square) ? "last" : ""}" data-analysis-square="${square}" aria-label="${square}">
         ${column === 0 ? `<span class="coord rank">${rank}</span>` : ""}${row === 7 ? `<span class="coord file">${file}</span>` : ""}
-        ${pieceName ? `<img src="${pieceUrl(pieceName)}" alt="" draggable="false">` : ""}
+        ${pieceName ? `<img class="piece-image" src="${pieceUrl(pieceName)}" alt="" draggable="false">` : ""}
       </button>`);
     }));
     $("#analysisBoard").innerHTML = html.join("");
@@ -130,6 +130,7 @@ export function initAnalysisBoard({ getPieceSet, getEngineProvider }) {
       state.moves.push({ san: played.san, uci: uci(played) });
       resetMoveSelection();
       $("#analysisEngineResult").textContent = "Position changed — analyze when ready.";
+      onSound("move");
       return renderBoard(uci(played));
     }
     if (piece?.color === state.chess.turn()) {
@@ -183,6 +184,8 @@ export function initAnalysisBoard({ getPieceSet, getEngineProvider }) {
     $("#analysisEditButton").classList.toggle("active", state.editing);
     $("#analysisEditButton").textContent = state.editing ? "Finish editing" : "Edit position";
     $("#analysisEditor").classList.toggle("hidden", !state.editing);
+    $(".engine-analysis-card").classList.toggle("hidden", state.editing);
+    $(".notation-analysis-card").classList.toggle("hidden", state.editing);
     if (!state.editing) {
       state.rootFen = state.chess.fen();
       state.moves = [];
@@ -194,6 +197,7 @@ export function initAnalysisBoard({ getPieceSet, getEngineProvider }) {
     state.chess = new Chess();
     state.rootFen = state.chess.fen();
     state.moves = [];
+    onSound("move");
     renderBoard();
   });
   $("#analysisUndoButton").addEventListener("click", () => {
@@ -201,6 +205,7 @@ export function initAnalysisBoard({ getPieceSet, getEngineProvider }) {
     state.chess.undo();
     state.moves.pop();
     resetMoveSelection();
+    onSound("move");
     renderBoard();
   });
   $("#analysisFlipButton").addEventListener("click", () => { state.flipped = !state.flipped; renderBoard(); });

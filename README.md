@@ -28,9 +28,10 @@ Do not expose this development server directly to the public internet.
 
 ## Deploy to GitHub Pages
 
-The included `.github/workflows/pages.yml` publishes the contents of `static/`
-without a build step. In the repository's **Settings → Pages**, choose
-**GitHub Actions** as the source, then push `main` or run the workflow manually.
+The included `.github/workflows/pages.yml` can publish the contents of `static/`
+without a build step. It is intentionally manual while paid engine access is
+being prepared. When the product is ready, choose **GitHub Actions** in the
+repository's **Settings → Pages** and run the workflow manually.
 
 All application and asset URLs are relative, so the site works under the
 `/chessreplaystatic/` project path as well as at a custom domain.
@@ -65,9 +66,14 @@ boundaries are documented in [`docs/architecture.md`](docs/architecture.md).
   misses a forced mate, or misses a clearly winning position.
 - A move becomes a brilliancy lesson only when it offers meaningful material,
   is best or nearly best, leaves a sound position, and survives comparison with
-  every legal alternative. This follows [Chess.com's published classification
+  every legal alternative. Replay checks direct offers, exchange sacrifices,
+  discovered sacrifices, and zwischenzugs that deliberately leave a piece en
+  prise. This follows [Chess.com's published classification
   principles](https://support.chess.com/en/articles/8572705-how-are-moves-classified-what-is-a-blunder-or-brilliant-etc)
   while keeping Replay's thresholds explicit and deterministic.
+- The home-page study selector can scan a player's latest 100 games specifically
+  for personal brilliancies; ordinary combined and mistake decks retain the
+  shorter recent-game window.
 - Puzzles are added to the deck after each game finishes; training can begin
   while the remaining selected games continue analyzing.
 - Again, Hard, Good, and Easy grades control when a puzzle returns.

@@ -1,8 +1,6 @@
 name: Deploy Replay to GitHub Pages
 
 on:
-  push:
-    branches: [main]
   workflow_dispatch:
 
 permissions:
@@ -35,6 +33,7 @@ jobs:
           node --check static/lib/analysis-board.js
           node --check static/lib/brilliancy.js
           node --check static/lib/masters.js
+          node --test tests/brilliancy.test.mjs
       - name: Upload static site
         uses: actions/upload-pages-artifact@v4
         with:

@@ -2,6 +2,13 @@ import { Chess } from "../vendor/chess/chess.js";
 
 const PIECE_VALUES = { p: 100, n: 320, b: 330, r: 500, q: 900, k: 0 };
 const PIECE_NAMES = { p: "pawn", n: "knight", b: "bishop", r: "rook", q: "queen", k: "king" };
+export const BRILLIANCY_THRESHOLDS = Object.freeze({
+  maximumLoss: 80,
+  minimumEvaluation: -100,
+  clearlyWinning: 900,
+  onlyMoveBonus: 150,
+  endgameBonus: 80,
+});
 
 function uciFor(move) {
   return `${move.from}${move.to}${move.promotion || ""}`;
@@ -30,7 +37,6 @@ export function findSacrificeCandidate(fen, playedUci) {
     const victim = after.get(reply.to);
     if (!victim || victim.color !== mover.color || PIECE_VALUES[victim.type] < PIECE_VALUES.n) return null;
     const movedPiece = reply.to === played.to;
-    if (!movedPiece && before.isAttacked(reply.to, opponent)) return null;
     const investment = Math.max(0, PIECE_VALUES[victim.type] - capturedValue);
     return {
       reply: uciFor(reply),
@@ -39,13 +45,19 @@ export function findSacrificeCandidate(fen, playedUci) {
       pieceName: PIECE_NAMES[victim.type],
       investment,
       movedPiece,
+      wasAlreadyOffered: !movedPiece && before.isAttacked(reply.to, opponent),
     };
-  }).filter(Boolean).sort((a, b) => b.investment - a.investment);
+  }).filter(Boolean);
 
-  const strongest = captures[0];
-  if (!strongest || strongest.investment < 140) return null;
+  const offers = [...new Map(captures.map(offer => [offer.square, offer])).values()]
+    .filter(offer => offer.investment >= 140)
+    .sort((a, b) => b.investment - a.investment);
+
+  const strongest = offers[0];
+  if (!strongest) return null;
   return {
     ...strongest,
+    offers,
     played,
     playedSan: played.san,
     moverColor: mover.color,
@@ -54,17 +66,23 @@ export function findSacrificeCandidate(fen, playedUci) {
   };
 }
 
-export function pvMaterialInvestment(fen, pv, color) {
+export function analyzeSacrificeLine(fen, pv, color) {
   const chess = new Chess(fen);
   const starting = material(chess, color);
-  let largest = 0;
-  for (const uci of pv.slice(0, 6)) {
+  let investment = 0;
+  const san = [];
+  for (const uci of pv.slice(0, 10)) {
     const move = chess.moves({ verbose: true }).find(candidate => uciFor(candidate) === uci || uciFor(candidate).slice(0, 4) === uci.slice(0, 4) && !uci[4]);
     if (!move) break;
+    san.push(move.san);
     chess.move({ from: move.from, to: move.to, promotion: move.promotion });
-    largest = Math.max(largest, starting - material(chess, color));
+    investment = Math.max(investment, starting - material(chess, color));
   }
-  return largest;
+  return { investment, san: san.join(" ") };
+}
+
+export function pvMaterialInvestment(fen, pv, color) {
+  return analyzeSacrificeLine(fen, pv, color).investment;
 }
 
 export function alternativeMoves(fen, excludedUci) {
@@ -72,8 +90,23 @@ export function alternativeMoves(fen, excludedUci) {
   return chess.moves({ verbose: true }).map(uciFor).filter(uci => uci !== excludedUci && !(uci.slice(0, 4) === excludedUci.slice(0, 4) && !excludedUci[4]));
 }
 
-export function explainBrilliancy(candidate, pvInvestment) {
-  const kind = candidate.movedPiece ? `offers the ${candidate.pieceName} on ${candidate.square}` : `leaves the ${candidate.pieceName} on ${candidate.square} en prise`;
-  const recovered = pvInvestment >= candidate.investment ? "and the principal variation accepts it, revealing the tactical compensation" : "while the best defense has to decline the offer";
+export function isSoundBrilliancy({ loss, playedValue, alternativeValue, pieceCount, keepsWinningMate = false }) {
+  const nearlyBest = keepsWinningMate || loss <= BRILLIANCY_THRESHOLDS.maximumLoss;
+  const soundAfter = keepsWinningMate || playedValue >= BRILLIANCY_THRESHOLDS.minimumEvaluation;
+  const alternativeGap = playedValue - alternativeValue;
+  const notTriviallyWinning = alternativeValue < BRILLIANCY_THRESHOLDS.clearlyWinning || alternativeGap >= BRILLIANCY_THRESHOLDS.onlyMoveBonus;
+  const satisfiesEndgameRule = pieceCount > 12 || alternativeGap >= BRILLIANCY_THRESHOLDS.endgameBonus;
+  return nearlyBest && soundAfter && notTriviallyWinning && satisfiesEndgameRule;
+}
+
+export function explainBrilliancy(candidate, line) {
+  const kind = candidate.movedPiece
+    ? `offers the ${candidate.pieceName} on ${candidate.square}`
+    : candidate.wasAlreadyOffered
+      ? `deliberately keeps the ${candidate.pieceName} on ${candidate.square} en prise`
+      : `uncovers an attack on the ${candidate.pieceName} on ${candidate.square}`;
+  const recovered = line.investment >= candidate.investment
+    ? "and the engine's best-defense line accepts it, proving the compensation"
+    : "while the engine's best defense has to decline the material";
   return `${candidate.playedSan} ${kind} ${recovered}.`;
 }

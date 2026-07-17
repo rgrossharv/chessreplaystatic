@@ -28,13 +28,14 @@
       <div class="landing-intro">
         <span class="eyebrow"><span></span> Personal chess study</span>
         <h1>Learn from your games.<br><span>Learn from masters.</span></h1>
-        <p>Turn recent games into focused puzzles, or study the moves top players found—and missed.</p>
+        <p>Find mistakes and brilliant sacrifices in your own games, or study the moves top players found—and missed.</p>
         <form id="importForm" class="import-form">
           <select id="gameSource" aria-label="Game source"><option value="chesscom">Chess.com</option><option value="lichess">Lichess</option></select>
+          <select id="studyFocus" aria-label="Study focus"><option value="all">All lessons</option><option value="brilliancies">My brilliancies</option><option value="mistakes">My mistakes</option></select>
           <label class="username-field"><span id="sourcePrefix">chess.com/</span><input id="username" autocomplete="username" placeholder="username" required minlength="2" maxlength="30"></label>
           <button class="primary-button" type="submit"><span>Build deck</span></button>
         </form>
-        <div class="search-meta"><span>Last 7 days, then latest 20 as fallback</span><span id="heroError" class="inline-error" role="alert"></span></div>
+        <div class="search-meta"><span id="searchScopeText">Last 7 days, then latest 20 as fallback</span><span id="heroError" class="inline-error" role="alert"></span></div>
       </div>
 
     </section>
@@ -48,7 +49,7 @@
     <section id="analysisPage" class="analysis-page hidden">
       <div class="page-heading analysis-heading"><div><span class="eyebrow"><span></span> Free analysis board</span><h1>Explore any position.</h1><p>Play legal moves, edit every square, load a FEN, and ask your selected engine for its best continuation.</p></div><div class="analysis-toolbar"><button id="analysisResetButton" class="secondary-button">Starting position</button><button id="analysisUndoButton" class="secondary-button">Undo</button><button id="analysisFlipButton" class="secondary-button">Flip</button><button id="analysisEditButton" class="secondary-button">Edit position</button></div></div>
       <div class="analysis-workspace">
-        <section class="analysis-board-column"><div id="analysisBoardShell" class="analysis-board-shell theme-brown"><div id="analysisBoard" class="analysis-board" aria-label="General analysis chess board"></div></div><div id="analysisBoardError" class="inline-error" role="alert"></div></section>
+        <section class="analysis-board-column"><div id="analysisBoardShell" class="board-shell analysis-board-shell theme-brown"><div id="analysisBoard" class="board analysis-board" aria-label="General analysis chess board"></div></div><div id="analysisBoardError" class="inline-error" role="alert"></div></section>
         <aside class="analysis-sidebar">
           <section id="analysisEditor" class="analysis-card hidden"><div class="analysis-card-heading"><span class="panel-kicker">Position editor</span><button id="analysisClearButton" class="text-button">Clear board</button></div><div id="analysisPalette" class="analysis-palette"></div><label>Side to move<select id="analysisTurn"><option value="w">White</option><option value="b">Black</option></select></label><label>FEN<div class="fen-row"><input id="analysisFen" spellcheck="false"><button id="analysisLoadFenButton" class="secondary-button">Set</button></div></label><p>Use the palette and board for visual editing. FEN gives full control of castling and en-passant rights.</p></section>
           <section class="analysis-card engine-analysis-card"><div class="analysis-card-heading"><span class="panel-kicker">Engine</span><button id="analyzePositionButton" class="primary-button">Analyze position</button></div><div class="analysis-evaluation"><strong id="analysisEngineEval">—</strong><span id="analysisEngineResult">Ready for analysis.</span></div><div class="engine-line"><span>Best continuation</span><strong id="analysisEngineLine">—</strong></div></section>
@@ -63,8 +64,6 @@
         <div class="toolbar-actions"><span class="deck-stat"><strong id="dueCount">0</strong> due</span><span class="deck-stat"><strong id="puzzleCount">0</strong> positions</span><button id="gamesButton" class="secondary-button">Games <span id="gamesCount">0</span></button></div>
       </div>
 
-      <div id="analysisBanner" class="analysis-banner hidden"><div class="analysis-copy"><span class="loader"></span><div><strong id="analysisTitle">Starting Stockfish…</strong><span id="analysisDetail">The work happens on this device.</span></div></div><div class="progress-track"><span id="analysisProgress"></span></div></div>
-
       <div class="training-grid">
         <aside class="context-panel">
           <div class="puzzle-context"><div><span id="puzzleCategory" class="category">Your move</span><h2 id="puzzlePrompt">Find the best move in this position</h2></div><div class="game-context"><strong id="puzzleOpponent">—</strong><span id="puzzleMeta">Choose games to begin</span></div></div>
@@ -76,6 +75,7 @@
         <section class="board-area"><div id="boardShell" class="board-shell theme-brown"><div id="board" class="board" aria-label="Interactive chess board"></div><svg id="arrows" class="arrows" viewBox="0 0 800 800" preserveAspectRatio="none" aria-hidden="true"></svg></div><div id="boardMessage" class="board-message"><span class="message-dot"></span><span id="boardMessageText">Select a piece, then choose its destination.</span></div></section>
 
         <aside class="answer-panel">
+          <div id="analysisBanner" class="analysis-banner analysis-banner-panel hidden"><div class="analysis-copy"><span class="loader"></span><div><strong id="analysisTitle">Starting Stockfish…</strong><span id="analysisDetail">The work happens on this device.</span></div></div><div class="progress-track"><span id="analysisProgress"></span></div></div>
           <div id="welcomePanel" class="answer-state"><span class="panel-kicker">Training loop</span><h2>Important positions, not engine noise.</h2><p>Replay keeps large mistakes, missed mates, and substantial missed wins.</p><button id="startAnalysisButton" class="primary-button">Analyze selected games</button></div>
           <div id="thinkingPanel" class="answer-state hidden"><span class="thinking-knight">♞</span><span id="thinkingEngine" class="panel-kicker">Stockfish 18</span><h2>Finding the moments that matter.</h2><p id="thinkingDetail">Your browser is evaluating the selected games.</p></div>
           <div id="puzzlePanel" class="answer-state hidden"><span class="panel-kicker">From the game</span><h2>What would you play?</h2><p>Click or drag a piece to its destination. The board is shown from the studied player's side.</p><div class="hint-card"><span>Hint</span><strong id="puzzleHint">Look for forcing moves: checks, captures, and threats.</strong></div></div>
