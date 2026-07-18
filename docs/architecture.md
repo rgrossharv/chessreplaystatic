@@ -7,7 +7,7 @@ owns only data and secrets that cannot safely be authoritative in a browser.
 ## Static application
 
 The browser imports public games directly from Chess.com and Lichess, parses
-PGN with `chess.js`, evaluates positions, builds puzzles, renders the board, and
+PGN with `chess.js`, evaluates positions with local Stockfish or Reckless, builds puzzles, renders the board, and
 schedules reviews. Device profiles are intentionally described as device-only;
 they are not password accounts and do not imply cross-device durability.
 
@@ -46,9 +46,9 @@ scoped even when the account session is longer lived.
 
 Replay uses these product rules:
 
-- Free users may import their own public games, run Stockfish in the browser,
+- Free users may import their own public games, run Stockfish or Reckless in the browser,
   review locally cached decks, and keep device-profile preferences.
-- Plus users may select configured Lc0 and Reckless gateways and build master
+- Plus users may select configured Lc0 cloud and Reckless cloud gateways and build master
   decks from verified Chess.com grandmaster accounts.
 - If a user upgrades mid-session, the existing deck stays intact. New analysis
   requests can use Plus engines after `GET /v1/session` reports the entitlement
@@ -90,6 +90,34 @@ must preserve that perspective for both unrestricted and `searchMoves` calls.
 Returning this small contract keeps puzzle generation independent from any
 specific vendor. A future asynchronous gateway can add a job resource while
 preserving the same final result shape.
+
+## Local Reckless provider
+
+`BrowserReckless` adapts the vendored `RecklessEngine` package to the same
+`init()`, `evaluate(fen, searchMoves)`, and `close()` contract as Stockfish. The
+adapter dynamically imports the small package wrapper, and neither that wrapper,
+its worker, nor 61.5 MiB of WASM chunks are fetched until Reckless analysis is
+explicitly started. It is a free
+local provider with ID `reckless-browser`; the remote Plus concept keeps the ID
+`reckless`.
+
+Assets are colocated in `static/vendor/reckless/`. Both the worker URL and asset
+base are derived from `import.meta.url`, which preserves the GitHub Pages project
+prefix and also works at a custom-domain root. The worker streams all four
+chunks, reports combined progress, reassembles the bytes, and instantiates the
+single-threaded SIMD build.
+
+The fixed 50,000-node default is distinct from Stockfish's depth-12 default and
+is included in the descriptor fingerprint. `searchMoves` is implemented as an
+actual root-move filter in the pinned Rust/WASM build. The worker also verifies
+the best move against the requested set and raises a capability error if a
+future WASM build omits the filtering API.
+
+Reckless search is synchronous inside its worker. Replacement and cancellation
+therefore terminate the old worker, reject pending requests with `AbortError`,
+create a fresh worker, restore the last confirmed FEN, and discard messages from
+old worker generations. View-level position tokens add a second stale-result
+guard before UI state is updated.
 
 ## Security boundary
 
