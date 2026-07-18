@@ -1,6 +1,6 @@
 import { Chess } from "./vendor/chess/chess.js";
 import { importGames, getGameDetail as buildGameDetail } from "./lib/game-import.js";
-import { createEngine, engineDescriptor, engineDescriptors, SEARCH_DEPTH } from "./lib/engine-providers.js";
+import { createEngine, engineDescriptor, engineDescriptors, RECKLESS_NODE_LIMIT, SEARCH_DEPTH } from "./lib/engine-providers.js";
 import { activateDeviceProfile, clearProfileSession, continueAsGuest, createDeviceProfile, hasPremiumEntitlement, listDeviceProfiles, restoreProfileSession } from "./lib/profile-store.js";
 import { alternativeMoves, analyzeSacrificeLine, BRILLIANCY_THRESHOLDS, explainBrilliancy, findSacrificeCandidate, isSoundBrilliancy } from "./lib/brilliancy.js";
 import { classifyPuzzleEligibility } from "./lib/puzzle-rules.js";
@@ -67,6 +67,12 @@ function prefsKey() { return `replay:prefs:${identityKey()}`; }
 function hasPlus() { return hasPremiumEntitlement(state.appUser); }
 function engineRequiresPlus(provider) { return provider.tier === "plus"; }
 function canUseEngine(provider) { return provider.configured && (!engineRequiresPlus(provider) || hasPlus()); }
+function engineLimitText(provider) { return provider.id === "reckless-browser" ? `${RECKLESS_NODE_LIMIT.toLocaleString()} nodes` : `depth ${SEARCH_DEPTH}`; }
+function downloadProgressText({ loaded = 0, total = null }) {
+  const loadedMiB = (loaded / (1024 * 1024)).toFixed(1);
+  if (!total) return `Downloading Reckless engine · ${loadedMiB} MiB received`;
+  return `Downloading Reckless engine · ${Math.round((loaded / total) * 100)}% (${loadedMiB} of ${(total / (1024 * 1024)).toFixed(1)} MiB)`;
+}
 
 function loadJson(key, fallback) {
   try { return JSON.parse(localStorage.getItem(key)) ?? fallback; }
@@ -205,7 +211,7 @@ async function buildDeck(force = false) {
   state.sessionSeen.clear();
   showAnswer("thinking");
   $("#thinkingEngine").textContent = provider.name;
-  $("#thinkingDetail").textContent = provider.id === "stockfish-browser" ? "Your browser is evaluating the selected games." : "Your configured compute service is evaluating the selected games.";
+  $("#thinkingDetail").textContent = provider.local ? "Your browser is evaluating the selected games; no positions leave this device." : "Your configured compute service is evaluating the selected games.";
   $("#analysisBanner").classList.remove("hidden");
   $("#analysisProgress").style.width = "0%";
   $("#analysisTitle").textContent = `Preparing ${provider.name}…`;
@@ -223,12 +229,16 @@ async function buildDeck(force = false) {
       if (!gamePuzzles) {
         if (!engine) {
           engine = createEngine(provider.id);
-          await engine.init();
+          const removeProgress = engine.onProgress?.(progress => {
+            $("#analysisDetail").textContent = downloadProgressText(progress);
+          });
+          try { await engine.init(); }
+          finally { removeProgress?.(); }
         }
         const target = state.focus === "brilliancies" ? "brilliancies" : state.focus === "mistakes" ? "mistakes" : "lessons";
         $("#analysisTitle").textContent = `${provider.name} · finding ${target} vs ${game.opponent}`;
         gamePuzzles = await analyzeGameInBrowser(engine, detail, game, (current, total) => {
-          $("#analysisDetail").textContent = `Move ${current} of ${total} · depth ${SEARCH_DEPTH}`;
+          $("#analysisDetail").textContent = `Move ${current} of ${total} · ${engineLimitText(provider)}`;
         });
         cache.games[game.id] ||= {};
         cache.games[game.id][state.focus] = { engine: provider.fingerprint, analyzedAt: Date.now(), puzzles: gamePuzzles };
@@ -784,7 +794,7 @@ function applyPreferences() {
   $$('[data-engine-provider]').forEach(button => button.classList.toggle("active", button.dataset.engineProvider === state.prefs.engineProvider));
   const provider = engineDescriptor(state.prefs.engineProvider);
   const tier = engineRequiresPlus(provider) ? "Plus" : "Free";
-  if (!state.analyzing) $("#engineName").textContent = provider.id === "stockfish-browser" ? `${provider.name} loads in your browser · ${tier}` : `${provider.name} · ${tier}`;
+  if (!state.analyzing) $("#engineName").textContent = provider.local ? `${provider.name} runs in your browser · ${tier}` : `${provider.name} · ${tier}`;
   if (state.puzzleChess) renderBoard();
   generalAnalysisBoard?.refresh();
 }
@@ -795,12 +805,13 @@ function renderEngineChoices() {
     const available = canUseEngine(provider);
     const badge = !provider.configured ? "Endpoint needed" : requiresPlus ? (hasPlus() ? "Plus active" : "Plus") : "Included";
     return `<button type="button" data-engine-provider="${provider.id}" class="${requiresPlus && !available ? "locked" : ""}" ${provider.configured ? "" : "disabled"}>
-    <span><strong>${escapeHtml(provider.name)}</strong><small>${escapeHtml(provider.detail || "Remote analysis")}</small></span>
+    <span><strong>${escapeHtml(provider.selectorName || provider.name)}</strong><small>${escapeHtml(provider.detail || "Remote analysis")}</small>${provider.caution ? `<small>${escapeHtml(provider.caution)}</small>` : ""}</span>
     <em>${badge}</em>
   </button>`;
   }).join("");
   $$('[data-engine-provider]').forEach(button => button.addEventListener("click", () => {
     if (button.disabled || button.dataset.engineProvider === state.prefs.engineProvider) return;
+    if (state.analyzing) return showToast("Finish the current deck analysis before changing engines.");
     const provider = engineDescriptor(button.dataset.engineProvider);
     if (!canUseEngine(provider)) {
       showPricing(`${provider.name} is a Plus engine. Upgrade before starting new Lc0 or Reckless analysis.`);
@@ -809,6 +820,7 @@ function renderEngineChoices() {
     state.practiceEngine?.close();
     state.practiceEngine = null;
     state.practiceEnginePromise = null;
+    generalAnalysisBoard?.cancel();
     state.prefs.engineProvider = button.dataset.engineProvider;
     savePreferences();
     showToast(`${engineDescriptor(state.prefs.engineProvider).name} selected for new analysis.`);
@@ -982,8 +994,8 @@ function updateIdentityUI() {
   $("#settingsAccountName").textContent = name;
   $("#settingsAccountDetail").textContent = state.appUser ? "This device profile keeps progress and preferences separate in this browser." : "Guest progress is saved only in this browser.";
   $("#settingsPlanDetail").textContent = hasPlus()
-    ? "Plan: Plus. Lc0, Reckless, and master decks are available while the account API reports an active entitlement."
-    : "Plan: Free. Stockfish analysis stays local; Lc0, Reckless, and master decks require Plus.";
+    ? "Plan: Plus. Both browser engines remain local; Lc0 cloud, Reckless cloud, and master decks are available while the account API reports an active entitlement."
+    : "Plan: Free. Stockfish 18 and Reckless browser analysis stay local; Lc0 cloud, Reckless cloud, and master decks require Plus.";
   $("#profileDialogName").textContent = `${name} · ${plan}`;
   $("#logoutButton").textContent = state.appUser ? "Switch profile" : "Leave guest session";
 }

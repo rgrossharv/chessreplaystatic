@@ -1,24 +1,48 @@
 import { replayConfig } from "../config.js";
 
 export const SEARCH_DEPTH = 12;
+export const RECKLESS_NODE_LIMIT = Math.min(1_000_000, Math.max(1_000, Number(replayConfig.browserReckless?.nodes) || 50_000));
+
+const RECKLESS_BROWSER_VERSION = "0.1.0";
+const RECKLESS_ENGINE_COMMIT = "a6fa482c";
 
 const browserDescriptor = {
   id: "stockfish-browser",
   name: "Stockfish 18",
+  selectorName: "Stockfish 18 — browser",
   detail: "Runs privately in this browser",
   tier: "free",
   configured: true,
+  local: true,
+  supportsConstrainedSearch: true,
   fingerprint: "stockfish-18-lite-single:depth-12",
+};
+
+const recklessBrowserDescriptor = {
+  id: "reckless-browser",
+  name: "Reckless",
+  selectorName: "Reckless — browser",
+  detail: "Runs privately in this browser · 61.5 MiB first-use download",
+  caution: "Single-threaded browser engine. It may be slower than native Reckless and can use substantial memory, battery, and mobile data.",
+  tier: "free",
+  configured: true,
+  local: true,
+  supportsConstrainedSearch: true,
+  downloadBytes: 64_464_038,
+  fingerprint: `reckless-browser:${RECKLESS_BROWSER_VERSION}:${RECKLESS_ENGINE_COMMIT}:searchmoves-v1:nodes-${RECKLESS_NODE_LIMIT}`,
 };
 
 export function engineDescriptors() {
   return [
     browserDescriptor,
+    recklessBrowserDescriptor,
     ...replayConfig.remoteEngines.map(engine => ({
       ...engine,
       detail: engine.description,
       tier: engine.tier || "plus",
       configured: Boolean(engine.endpoint),
+      local: false,
+      supportsConstrainedSearch: true,
       fingerprint: `${engine.id}:${engine.version || "remote-v1"}:depth-12`,
     })),
   ];
@@ -28,15 +52,19 @@ export function engineDescriptor(id) {
   return engineDescriptors().find(engine => engine.id === id) || browserDescriptor;
 }
 
-class BrowserStockfish {
+export class BrowserStockfish {
   constructor() {
     this.descriptor = browserDescriptor;
     this.worker = new Worker(new URL("../vendor/stockfish/stockfish-18-lite-single.js", import.meta.url));
     this.waiters = [];
     this.pending = null;
+    this.closed = false;
     this.worker.onmessage = event => this.onMessage(String(event.data ?? ""));
     this.worker.onerror = error => {
-      if (this.pending) this.pending.reject(new Error("Stockfish could not start in this browser."));
+      if (this.pending) {
+        this.pending.reject(new Error("Stockfish could not start in this browser."));
+        this.pending = null;
+      }
       console.error(error);
     };
   }
@@ -46,7 +74,11 @@ class BrowserStockfish {
   waitFor(token, timeout = 30000) {
     return new Promise((resolve, reject) => {
       const timer = setTimeout(() => reject(new Error(`Stockfish timed out waiting for ${token}.`)), timeout);
-      this.waiters.push({ token, resolve: value => { clearTimeout(timer); resolve(value); } });
+      this.waiters.push({
+        token,
+        resolve: value => { clearTimeout(timer); resolve(value); },
+        reject: error => { clearTimeout(timer); reject(error); },
+      });
     });
   }
 
@@ -90,8 +122,183 @@ class BrowserStockfish {
   }
 
   close() {
+    if (this.closed) return;
+    this.closed = true;
+    const error = cancellationError("Stockfish analysis was cancelled.");
+    if (this.pending) {
+      this.pending.reject(error);
+      this.pending = null;
+    }
+    this.waiters.forEach(waiter => waiter.reject(error));
+    this.waiters = [];
     this.send("quit");
     this.worker.terminate();
+  }
+}
+
+export function recklessAssetUrls(moduleUrl = import.meta.url) {
+  const assetBaseUrl = new URL("../vendor/reckless/", moduleUrl).href;
+  return {
+    assetBaseUrl,
+    wrapperUrl: new URL("../vendor/reckless/reckless-engine.js", moduleUrl).href,
+    workerUrl: new URL("../vendor/reckless/reckless-worker.js", moduleUrl).href,
+  };
+}
+
+function cancellationError(message = "Engine analysis was cancelled.") {
+  const error = new Error(message);
+  error.name = "AbortError";
+  error.code = "ABORTED";
+  return error;
+}
+
+export function isEngineCancellation(error) {
+  return error?.name === "AbortError" || error?.code === "ABORTED";
+}
+
+function recklessSupportError(runtime) {
+  if (typeof runtime?.Worker === "undefined") return "Reckless requires Web Worker support. Update to a current browser and try again.";
+  if (typeof runtime?.WebAssembly === "undefined") return "Reckless requires WebAssembly support. Update to a current browser and try again.";
+  if (typeof runtime?.fetch !== "function") return "Reckless requires the browser Fetch API to download its local engine package.";
+  return null;
+}
+
+function explainRecklessError(error) {
+  if (isEngineCancellation(error)) return error;
+  const message = String(error?.message || error || "Reckless failed to start.");
+  if (error?.code === "UNSUPPORTED_BROWSER") return new Error(message);
+  if (error?.code === "UNSUPPORTED_SEARCH_MOVES") {
+    return new Error("This Reckless browser build cannot run constrained searchmoves, so Replay will not use an unrestricted result in its place.");
+  }
+  if (["ASSET_LOAD_ERROR", "INVALID_WASM", "WASM_INIT_ERROR", "INVALID_BINDINGS"].includes(error?.code)) {
+    return new Error(`Reckless could not load its 61.5 MiB browser package. ${message}`);
+  }
+  if (error?.code === "WORKER_ERROR" || error?.code === "WORKER_UNAVAILABLE") {
+    return new Error(`The Reckless browser worker could not start. ${message}`);
+  }
+  return new Error(message);
+}
+
+export function normalizeRecklessResult(data) {
+  const primary = data?.lines?.find(line => line.multiPv === 1) || data?.lines?.[0] || null;
+  const bestmove = String(data?.bestMove || "");
+  if (!/^[a-h][1-8][a-h][1-8][qrbn]?$/.test(bestmove)) throw new Error("Reckless returned an invalid best move.");
+  return {
+    bestmove,
+    depth: Number(data.depth ?? primary?.depth) || 0,
+    cp: data.scoreCp == null ? (primary?.scoreCp == null ? null : Number(primary.scoreCp)) : Number(data.scoreCp),
+    mate: data.mate == null ? (primary?.mate == null ? null : Number(primary.mate)) : Number(data.mate),
+    pv: Array.isArray(primary?.pv) ? primary.pv.map(String) : [],
+  };
+}
+
+function normalizedSearchMoves(searchMoves) {
+  if (searchMoves == null || searchMoves === "") return null;
+  const moves = (Array.isArray(searchMoves) ? searchMoves : String(searchMoves).split(/\s+/)).map(String).filter(Boolean);
+  return moves.length ? moves : null;
+}
+
+export class BrowserReckless {
+  constructor(options = {}) {
+    this.descriptor = recklessBrowserDescriptor;
+    this.runtime = options.runtime || globalThis;
+    this.closed = false;
+    this.sequence = 0;
+    const urls = options.urls || recklessAssetUrls();
+    this.urls = urls;
+    this.engine = options.engine || null;
+    this.enginePromise = null;
+    this.progressCallbacks = new Set();
+    this.removeEngineProgress = null;
+    if (this.engine) this.attachProgress();
+    this.onPageClose = () => this.close();
+    this.runtime.addEventListener?.("pagehide", this.onPageClose, { once: true });
+  }
+
+  async init() {
+    if (this.closed) throw new Error("This Reckless engine has already been closed.");
+    const supportError = recklessSupportError(this.runtime);
+    if (supportError) throw new Error(supportError);
+    try {
+      await this.loadEngine();
+      await this.engine.init();
+    } catch (error) {
+      throw explainRecklessError(error);
+    }
+  }
+
+  onProgress(callback) {
+    if (typeof callback !== "function") throw new TypeError("onProgress requires a callback");
+    this.progressCallbacks.add(callback);
+    return () => this.progressCallbacks.delete(callback);
+  }
+
+  attachProgress() {
+    this.removeEngineProgress?.();
+    this.removeEngineProgress = this.engine.onDownloadProgress(progress => {
+      this.progressCallbacks.forEach(callback => callback(progress));
+    });
+  }
+
+  async loadEngine() {
+    if (this.engine) return this.engine;
+    if (!this.enginePromise) {
+      this.enginePromise = import(this.urls.wrapperUrl)
+        .then(({ RecklessEngine }) => {
+          if (this.closed) throw cancellationError("Reckless initialization was cancelled.");
+          this.engine = new RecklessEngine({
+            assetBaseUrl: this.urls.assetBaseUrl,
+            workerUrl: this.urls.workerUrl,
+          });
+          this.attachProgress();
+          return this.engine;
+        })
+        .catch(error => {
+          this.enginePromise = null;
+          if (isEngineCancellation(error)) throw error;
+          const wrapped = new Error(`Unable to import the Reckless browser wrapper from ${this.urls.wrapperUrl}: ${error?.message || error}`);
+          wrapped.code = "ASSET_LOAD_ERROR";
+          throw wrapped;
+        });
+    }
+    return this.enginePromise;
+  }
+
+  async evaluate(fen, searchMoves = null) {
+    if (this.closed) throw new Error("This Reckless engine has already been closed.");
+    const token = ++this.sequence;
+    try {
+      const result = await this.engine.analyze({
+        fen,
+        nodes: RECKLESS_NODE_LIMIT,
+        multiPv: 1,
+        searchMoves: normalizedSearchMoves(searchMoves),
+      });
+      if (token !== this.sequence || this.closed) throw cancellationError("Reckless analysis was replaced by a newer position.");
+      return normalizeRecklessResult(result);
+    } catch (error) {
+      throw explainRecklessError(error);
+    }
+  }
+
+  async cancel() {
+    ++this.sequence;
+    if (this.closed) return;
+    try {
+      await this.engine.stop();
+    } catch (error) {
+      if (!isEngineCancellation(error)) throw explainRecklessError(error);
+    }
+  }
+
+  close() {
+    if (this.closed) return;
+    this.closed = true;
+    ++this.sequence;
+    this.runtime.removeEventListener?.("pagehide", this.onPageClose);
+    this.removeEngineProgress?.();
+    this.progressCallbacks.clear();
+    this.engine?.terminate();
   }
 }
 
@@ -149,5 +356,7 @@ function parseInfo(line) {
 
 export function createEngine(id = browserDescriptor.id) {
   const descriptor = engineDescriptor(id);
-  return descriptor.id === browserDescriptor.id ? new BrowserStockfish() : new RemoteEngine(descriptor);
+  if (descriptor.id === browserDescriptor.id) return new BrowserStockfish();
+  if (descriptor.id === recklessBrowserDescriptor.id) return new BrowserReckless();
+  return new RemoteEngine(descriptor);
 }

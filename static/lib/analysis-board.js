@@ -1,5 +1,5 @@
 import { Chess } from "../vendor/chess/chess.js";
-import { createEngine, engineDescriptor } from "./engine-providers.js";
+import { createEngine, engineDescriptor, isEngineCancellation } from "./engine-providers.js";
 
 const PIECES = ["wK", "wQ", "wR", "wB", "wN", "wP", "bK", "bQ", "bR", "bB", "bN", "bP"];
 
@@ -42,7 +42,23 @@ export function initAnalysisBoard({ getPieceSet, getEngineProvider, onSound = ()
     moves: [],
     engine: null,
     analyzing: false,
+    analysisToken: 0,
   };
+
+  function progressText({ loaded = 0, total = null }) {
+    const loadedMiB = (loaded / (1024 * 1024)).toFixed(1);
+    if (!total) return `${loadedMiB} MiB of the Reckless engine downloaded…`;
+    return `Downloading Reckless · ${Math.round((loaded / total) * 100)}% (${loadedMiB} of ${(total / (1024 * 1024)).toFixed(1)} MiB)`;
+  }
+
+  function cancelAnalysis(message = "Analysis cancelled.") {
+    ++state.analysisToken;
+    state.engine?.close();
+    state.engine = null;
+    if (state.analyzing) $("#analysisEngineResult").textContent = message;
+    state.analyzing = false;
+    $("#analyzePositionButton").disabled = false;
+  }
 
   function pieceUrl(piece) {
     return new URL(`../pieces/${getPieceSet()}/${piece}.svg`, import.meta.url).href;
@@ -103,6 +119,7 @@ export function initAnalysisBoard({ getPieceSet, getEngineProvider, onSound = ()
   }
 
   function editSquare(square) {
+    cancelAnalysis("Position changed — analysis cancelled.");
     if (state.editorPiece === "erase") state.chess.remove(square);
     else if (!state.chess.put({ color: state.editorPiece[0], type: state.editorPiece[1].toLowerCase() }, square)) {
       $("#analysisBoardError").textContent = "A position can contain only one king of each color.";
@@ -126,6 +143,7 @@ export function initAnalysisBoard({ getPieceSet, getEngineProvider, onSound = ()
     }
     const move = state.legalMoves.find(candidate => candidate.to === square);
     if (move) {
+      cancelAnalysis("Position changed — analysis cancelled.");
       const played = state.chess.move({ from: move.from, to: move.to, promotion: move.promotion || "q" });
       state.moves.push({ san: played.san, uci: uci(played) });
       resetMoveSelection();
@@ -142,7 +160,9 @@ export function initAnalysisBoard({ getPieceSet, getEngineProvider, onSound = ()
 
   function loadFen(value) {
     try {
-      state.chess = new Chess(value.trim());
+      const nextPosition = new Chess(value.trim());
+      cancelAnalysis("Position changed — analysis cancelled.");
+      state.chess = nextPosition;
       state.rootFen = state.chess.fen();
       state.moves = [];
       resetMoveSelection();
@@ -156,6 +176,7 @@ export function initAnalysisBoard({ getPieceSet, getEngineProvider, onSound = ()
   async function analyze() {
     if (state.analyzing) return;
     state.analyzing = true;
+    const token = ++state.analysisToken;
     const button = $("#analyzePositionButton");
     button.disabled = true;
     const descriptor = engineDescriptor(getEngineProvider());
@@ -165,14 +186,21 @@ export function initAnalysisBoard({ getPieceSet, getEngineProvider, onSound = ()
       if (kings.filter(piece => piece.color === "w").length !== 1 || kings.filter(piece => piece.color === "b").length !== 1) throw new Error("Add exactly one white king and one black king before analysis.");
       state.engine?.close();
       state.engine = createEngine(descriptor.id);
-      await state.engine.init();
       const fen = state.chess.fen();
+      const removeProgress = state.engine.onProgress?.(progress => {
+        if (token === state.analysisToken) $("#analysisEngineResult").textContent = progressText(progress);
+      });
+      try { await state.engine.init(); }
+      finally { removeProgress?.(); }
       const result = await state.engine.evaluate(fen);
+      if (token !== state.analysisToken || state.chess.fen() !== fen) return;
       $("#analysisEngineEval").textContent = resultText(result);
       $("#analysisEngineLine").textContent = pvToSan(fen, result.pv) || result.bestmove;
       $("#analysisEngineResult").textContent = `${descriptor.name} · depth ${result.depth || "—"}`;
     } catch (error) {
-      $("#analysisEngineResult").textContent = error.message || "Analysis failed.";
+      if (token === state.analysisToken && !isEngineCancellation(error)) {
+        $("#analysisEngineResult").textContent = error.message || "Analysis failed.";
+      }
     } finally {
       state.analyzing = false;
       button.disabled = false;
@@ -194,6 +222,7 @@ export function initAnalysisBoard({ getPieceSet, getEngineProvider, onSound = ()
     renderBoard();
   });
   $("#analysisResetButton").addEventListener("click", () => {
+    cancelAnalysis("Position reset — analysis cancelled.");
     state.chess = new Chess();
     state.rootFen = state.chess.fen();
     state.moves = [];
@@ -202,6 +231,7 @@ export function initAnalysisBoard({ getPieceSet, getEngineProvider, onSound = ()
   });
   $("#analysisUndoButton").addEventListener("click", () => {
     if (!state.moves.length) return;
+    cancelAnalysis("Position changed — analysis cancelled.");
     state.chess.undo();
     state.moves.pop();
     resetMoveSelection();
@@ -210,6 +240,7 @@ export function initAnalysisBoard({ getPieceSet, getEngineProvider, onSound = ()
   });
   $("#analysisFlipButton").addEventListener("click", () => { state.flipped = !state.flipped; renderBoard(); });
   $("#analysisClearButton").addEventListener("click", () => {
+    cancelAnalysis("Position changed — analysis cancelled.");
     state.chess.clear();
     state.moves = [];
     resetMoveSelection();
@@ -225,5 +256,9 @@ export function initAnalysisBoard({ getPieceSet, getEngineProvider, onSound = ()
 
   renderPalette();
   renderBoard();
-  return { refresh: () => { renderPalette(); renderBoard(); }, close: () => state.engine?.close() };
+  return {
+    refresh: () => { renderPalette(); renderBoard(); },
+    cancel: () => cancelAnalysis("Engine changed — analysis cancelled."),
+    close: () => cancelAnalysis(),
+  };
 }

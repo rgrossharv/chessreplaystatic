@@ -7,6 +7,11 @@
  */
 const defaults = {
   accountApiBase: "",
+  browserReckless: {
+    // A fixed node budget is more comparable and cache-safe than assuming
+    // Reckless depth 12 has the same cost or strength as Stockfish depth 12.
+    nodes: 50000,
+  },
   remoteEngines: [
     {
       id: "lc0",
@@ -34,5 +39,6 @@ const overrides = globalThis.REPLAY_CONFIG || {};
 export const replayConfig = Object.freeze({
   ...defaults,
   ...overrides,
+  browserReckless: { ...defaults.browserReckless, ...(overrides.browserReckless || {}) },
   remoteEngines: overrides.remoteEngines || defaults.remoteEngines,
 });

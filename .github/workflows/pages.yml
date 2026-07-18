@@ -45,6 +45,8 @@ jobs:
           node --check static/lib/analysis-board.js
           node --check static/lib/brilliancy.js
           node --check static/lib/masters.js
+          node --check static/vendor/reckless/reckless-engine.js
+          node --check static/vendor/reckless/reckless-worker.js
           node --test tests/*.test.mjs
       - name: Upload static site
         uses: actions/upload-pages-artifact@v4
