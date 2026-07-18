@@ -42,8 +42,11 @@ jobs:
           node --check static/lib/game-import.js
           node --check static/lib/profile-store.js
           node --check static/lib/puzzle-rules.js
+          node --check static/lib/auth-sync.js
+          node --check static/lib/engine-play.js
+          node --check static/lib/chess-report.js
           node --check static/lib/analysis-board.js
-          node --check static/lib/brilliancy.js
+          node --check static/lib/board-arrows.js
           node --check static/lib/masters.js
           node --test tests/*.test.mjs
       - name: Upload static site

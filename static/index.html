@@ -14,6 +14,8 @@
       <button id="navHome" class="nav-item active">Home</button>
       <button id="navMasters" class="nav-item">Masters</button>
       <button id="navAnalysis" class="nav-item">Analysis</button>
+      <button id="navPlay" class="nav-item">Play</button>
+      <button id="navReport" class="nav-item">Chess report</button>
       <button id="navPricing" class="nav-item">Pricing</button>
       <button id="navTraining" class="nav-item hidden">Training</button>
     </nav>
@@ -28,11 +30,10 @@
     <section class="landing" id="hero">
       <div class="landing-intro">
         <span class="eyebrow"><span></span> Personal chess study</span>
-        <h1>Learn from your games.<br><span>Learn from masters.</span></h1>
-        <p>Find mistakes and brilliant sacrifices in your own games, or study the moves top players found—and missed.</p>
+        <h1>Train from your games.</h1>
+        <p>Import a public game history and practice the positions that matter.</p>
         <form id="importForm" class="import-form">
           <select id="gameSource" aria-label="Game source"><option value="chesscom">Chess.com</option><option value="lichess">Lichess</option></select>
-          <select id="studyFocus" aria-label="Study focus"><option value="all">All lessons</option><option value="brilliancies">My brilliancies</option><option value="mistakes">My mistakes</option></select>
           <label class="username-field"><span id="sourcePrefix">chess.com/</span><input id="username" autocomplete="username" placeholder="username" required minlength="2" maxlength="30"></label>
           <button class="primary-button" type="submit"><span>Build deck</span></button>
         </form>
@@ -46,7 +47,7 @@
     </section>
 
     <section id="mastersPage" class="masters-page hidden">
-      <div class="page-heading"><div><span class="eyebrow"><span></span> Plus master decks</span><h1>Learn from the strongest players.</h1><p>Master decks use verified Chess.com grandmaster accounts and scan each player's latest 100 public standard games for mistake or brilliancy training.</p></div></div>
+      <div class="page-heading"><div><span class="eyebrow"><span></span> Plus master decks</span><h1>Learn from the strongest players.</h1><p>Search verified Chess.com grandmasters and train from mistakes in their latest 100 public games.</p></div></div>
       <section><div class="section-heading"><div><span class="panel-kicker">Featured grandmasters</span><h2>Start with a leading player</h2></div></div><div id="featuredMasters" class="master-grid master-grid-large"></div></section>
       <section class="gm-directory"><div class="section-heading directory-heading"><div><span class="panel-kicker">Chess.com titled directory</span><h2>All grandmasters</h2></div><label class="gm-search">Search<input id="gmSearch" type="search" placeholder="Player handle" autocomplete="off"></label></div><p id="gmDirectoryStatus" class="directory-status">Loading the grandmaster directory…</p><div id="gmDirectory" class="master-grid master-grid-directory"></div></section>
     </section>
@@ -54,21 +55,40 @@
     <section id="pricingPage" class="pricing-page hidden">
       <div class="page-heading"><div><span class="eyebrow"><span></span> Pricing</span><h1>Know which engine you are using.</h1><p>Replay keeps the free browser tier useful, then reserves remote neural and high-compute analysis for Plus.</p></div></div>
       <div class="pricing-grid">
-        <article class="pricing-card"><span class="plan-badge">Free</span><h2>Browser study</h2><p>For importing your own public games and building a local review deck.</p><ul><li>Chess.com and Lichess public-game import</li><li>Stockfish 18 running in your browser</li><li>Mistake, missed-win, missed-mate, and brilliancy lessons</li><li>Device profiles, preferences, cache, and review schedule in browser storage</li></ul><button id="pricingStartFree" class="secondary-button">Start free</button></article>
+        <article class="pricing-card"><span class="plan-badge">Free</span><h2>Browser study</h2><p>For importing your own public games and building a local review deck.</p><ul><li>Chess.com and Lichess public-game import</li><li>Stockfish 18 running in your browser</li><li>Mistake, missed-win, and missed-mate lessons</li><li>Device profiles, preferences, cache, and review schedule in browser storage</li></ul><button id="pricingStartFree" class="secondary-button">Start free</button></article>
         <article class="pricing-card featured-plan"><span class="plan-badge">Plus</span><h2>Premium analysis</h2><p>For stronger remote engines and curated master-study workflows.</p><ul><li>Lc0 cloud analysis through your configured compute gateway</li><li>Reckless cloud analysis through your configured compute gateway</li><li>Verified grandmaster master decks from the latest 100 public games</li><li>Previously analyzed Plus decks remain reviewable if a subscription lapses</li></ul><button id="pricingUpgradeButton" class="primary-button" type="button">Upgrade through account API</button></article>
       </div>
     </section>
 
     <section id="analysisPage" class="analysis-page hidden">
-      <div class="page-heading analysis-heading"><div><span class="eyebrow"><span></span> Free analysis board</span><h1>Explore any position.</h1><p>Play legal moves, edit every square, load a FEN, and ask your selected engine for its best continuation.</p></div><div class="analysis-toolbar"><button id="analysisResetButton" class="secondary-button">Starting position</button><button id="analysisUndoButton" class="secondary-button">Undo</button><button id="analysisFlipButton" class="secondary-button">Flip</button><button id="analysisEditButton" class="secondary-button">Edit position</button></div></div>
+      <div class="analysis-toolbar analysis-toolbar-primary" aria-label="Analysis board controls"><button id="analysisPgnButton" class="secondary-button">Import PGN</button><button id="analysisResetButton" class="secondary-button">Starting position</button><button id="analysisUndoButton" class="secondary-button">Undo</button><button id="analysisFlipButton" class="secondary-button">Flip</button><button id="analysisEditButton" class="secondary-button">Edit position</button></div>
       <div class="analysis-workspace">
-        <section class="analysis-board-column"><div id="analysisBoardShell" class="board-shell analysis-board-shell theme-brown"><div id="analysisBoard" class="board analysis-board" aria-label="General analysis chess board"></div></div><div id="analysisBoardError" class="inline-error" role="alert"></div></section>
+        <section class="analysis-board-column"><div id="analysisBoardShell" class="board-shell analysis-board-shell theme-brown"><div id="analysisBoard" class="board analysis-board" aria-label="General analysis chess board"></div><svg id="analysisArrows" class="arrows" viewBox="0 0 800 800" preserveAspectRatio="none" aria-hidden="true"></svg></div><div id="analysisBoardError" class="inline-error" role="alert"></div></section>
         <aside class="analysis-sidebar">
           <section id="analysisEditor" class="analysis-card hidden"><div class="analysis-card-heading"><span class="panel-kicker">Position editor</span><button id="analysisClearButton" class="text-button">Clear board</button></div><div id="analysisPalette" class="analysis-palette"></div><label>Side to move<select id="analysisTurn"><option value="w">White</option><option value="b">Black</option></select></label><label>FEN<div class="fen-row"><input id="analysisFen" spellcheck="false"><button id="analysisLoadFenButton" class="secondary-button">Set</button></div></label><p>Use the palette and board for visual editing. FEN gives full control of castling and en-passant rights.</p></section>
-          <section class="analysis-card engine-analysis-card"><div class="analysis-card-heading"><span class="panel-kicker">Engine</span><button id="analyzePositionButton" class="primary-button">Analyze position</button></div><div class="analysis-evaluation"><strong id="analysisEngineEval">—</strong><span id="analysisEngineResult">Ready for analysis.</span></div><div class="engine-line"><span>Best continuation</span><strong id="analysisEngineLine">—</strong></div></section>
-          <section class="analysis-card notation-analysis-card"><span class="panel-kicker">Move notation</span><div id="analysisNotation" class="analysis-notation"><p>Play moves on the board to build notation.</p></div></section>
+          <section class="analysis-card engine-analysis-card"><div class="analysis-card-heading"><span class="panel-kicker">Stockfish analysis</span><button id="analyzePositionButton" class="primary-button">Start engine</button></div><div class="analysis-evaluation"><strong id="analysisEngineEval">—</strong><span id="analysisEngineResult">Stockfish is paused.</span></div><div class="engine-line"><span>Best continuation</span><strong id="analysisEngineLine">—</strong></div></section>
+          <section class="analysis-card notation-analysis-card"><div class="analysis-card-heading notation-card-heading"><span class="panel-kicker">Move notation</span><button id="analysisAccuracyButton" class="text-button" disabled>Measure accuracy</button></div><div id="analysisAccuracySummary" class="accuracy-summary hidden"></div><div id="analysisAccuracyProgress" class="accuracy-progress hidden"><span></span></div><p id="analysisAccuracyNote" class="accuracy-note">Click any move to revisit that position. Accuracy is measured locally from engine loss.</p><div id="analysisNotation" class="analysis-notation"><p>Play moves or import PGN to build notation.</p></div></section>
         </aside>
       </div>
+    </section>
+
+    <section id="playPage" class="play-page hidden">
+      <div class="page-heading play-heading"><div><span class="eyebrow"><span></span> Play an engine</span><h1>Test your chess over the board.</h1><p>Stockfish runs locally today. Reckless activates when its browser distribution is installed.</p></div><button id="playNewGame" class="primary-button">New game</button></div>
+      <div class="play-workspace">
+        <section class="play-board-column"><div class="board-shell play-board-shell theme-brown"><div id="playBoard" class="board" aria-label="Play against a chess engine"></div></div><div class="board-message"><span class="message-dot"></span><span id="playStatus">Your move.</span></div></section>
+        <aside class="play-sidebar">
+          <section class="analysis-card"><span class="panel-kicker">Opponent</span><label>Engine<select id="playEngine"><option value="stockfish">Stockfish 18 · available</option><option value="reckless">Reckless · coming soon (assets required)</option></select></label><label>Play as<select id="playColor"><option value="w">White</option><option value="b">Black</option></select></label><button id="playResign" class="secondary-button full-control">Resign game</button></section>
+          <section class="analysis-card engine-notice"><strong>Engine availability</strong><p>Stockfish is included. Reckless uses a same-origin Web Worker and a roughly 61.5 MiB WebAssembly download.</p></section>
+        </aside>
+      </div>
+    </section>
+
+    <section id="reportPage" class="report-page hidden">
+      <div class="page-heading report-heading"><div><span class="eyebrow"><span></span> Last 100 games</span><h1>Find the patterns behind your mistakes.</h1><p>Replay evaluates your public games locally, groups costly moves by tactical pattern, and recommends matching labeled Lichess puzzle themes.</p></div></div>
+      <form id="reportForm" class="report-form"><select id="reportSource" aria-label="Game source"><option value="chesscom">Chess.com</option><option value="lichess">Lichess</option></select><input id="reportUsername" required minlength="2" maxlength="30" placeholder="username" autocomplete="username"><button class="primary-button" type="submit">Analyze up to 100 games</button></form>
+      <div id="reportProgress" class="report-progress hidden"><div><span class="loader"></span><strong id="reportProgressText">Preparing Stockfish…</strong></div><div class="progress-track"><span id="reportProgressBar"></span></div></div>
+      <div id="reportError" class="inline-error" role="alert"></div>
+      <div id="reportResults" class="report-results hidden"><section class="report-summary"><div><strong id="reportGames">0</strong><span>games</span></div><div><strong id="reportPositions">0</strong><span>positions checked</span></div><div><strong id="reportMistakes">0</strong><span>costly mistakes</span></div></section><div class="section-heading"><div><span class="panel-kicker">Recommended practice</span><h2>Your highest-value themes</h2></div></div><div id="reportRecommendations" class="report-grid"></div><div class="section-heading report-examples-heading"><div><span class="panel-kicker">Positions from your games</span><h2>Labeled examples</h2></div></div><div id="reportExamples" class="report-examples"></div></div>
     </section>
 
     <section id="trainer" class="trainer hidden">
@@ -91,7 +111,7 @@
           <div id="analysisBanner" class="analysis-banner analysis-banner-panel hidden"><div class="analysis-copy"><span class="loader"></span><div><strong id="analysisTitle">Starting Stockfish…</strong><span id="analysisDetail">The work happens on this device.</span></div></div><div class="progress-track"><span id="analysisProgress"></span></div></div>
           <div id="welcomePanel" class="answer-state"><span class="panel-kicker">Training loop</span><h2>Important positions, not engine noise.</h2><p>Replay keeps large mistakes, missed mates, and substantial missed wins.</p><button id="startAnalysisButton" class="primary-button">Analyze selected games</button></div>
           <div id="thinkingPanel" class="answer-state hidden"><span class="thinking-knight">♞</span><span id="thinkingEngine" class="panel-kicker">Stockfish 18</span><h2>Finding the moments that matter.</h2><p id="thinkingDetail">Your browser is evaluating the selected games.</p></div>
-          <div id="puzzlePanel" class="answer-state hidden"><span class="panel-kicker">From the game</span><h2>What would you play?</h2><p>Click or drag a piece to its destination. The board is shown from the studied player's side.</p><div class="hint-card"><span>Hint</span><strong id="puzzleHint">Look for forcing moves: checks, captures, and threats.</strong></div></div>
+          <div id="puzzlePanel" class="answer-state hidden"><span class="panel-kicker">From the game</span><h2>What would you play?</h2><p>Click or drag a piece to move. Right-drag to mark an arrow. The board is shown from the studied player's side.</p><div class="hint-card"><span>Hint</span><strong id="puzzleHint">Look for forcing moves: checks, captures, and threats.</strong></div></div>
           <div id="wrongPanel" class="answer-state hidden"><span class="result-icon wrong">×</span><span class="panel-kicker">Wrong move</span><h2>There is a stronger continuation.</h2><p id="wrongText">That move misses the point of the position.</p><div class="attempt-eval"><span>Your move</span><strong id="attemptMove">—</strong><small id="attemptEval">Evaluating…</small></div><div class="stack-actions"><button id="tryAgainButton" class="primary-button">Try again</button><button id="showSolutionButton" class="secondary-button">Show solution</button></div></div>
           <div id="solutionPanel" class="answer-state hidden"><span id="solutionIcon" class="result-icon correct">✓</span><span id="solutionKicker" class="panel-kicker">Correct</span><h2 id="solutionTitle">That is the move.</h2><div class="comparison"><div class="played"><span id="playedLabel">Played in the game</span><strong id="playedMove">—</strong><small id="playedEval">—</small></div><div class="best"><span id="bestLabel">Best move</span><strong id="bestMove">—</strong><small id="bestEval">—</small></div></div><div class="engine-line"><span id="solutionEngineLabel">Engine continuation</span><strong id="solutionLine">—</strong></div><p class="rating-label">When should this return?</p><div class="ratings"><button data-rating="again"><strong>Again</strong><span>&lt; 10m</span></button><button data-rating="hard"><strong>Hard</strong><span>1d</span></button><button data-rating="good"><strong>Good</strong><span>3d</span></button><button data-rating="easy"><strong>Easy</strong><span>7d</span></button></div></div>
           <div id="emptyPanel" class="answer-state hidden"><span class="result-icon correct">✓</span><span class="panel-kicker">Deck clear</span><h2>No qualifying positions found.</h2><p>Choose more games or import another account.</p></div>
@@ -101,13 +121,17 @@
   </main>
 
   <dialog id="authDialog" class="modal auth-modal">
-    <div class="auth-brand">Replay</div><h2>Save your training progress</h2><p>Create a device profile for separate preferences and review history. No password is stored in this static version.</p>
+    <div class="auth-brand">Replay</div><h2>Save your games and progress</h2><p>Use one cloud account across devices. If Google and GitHub return the same email, Replay links them to the same account.</p>
+    <div class="social-auth"><button type="button" class="secondary-button" data-cloud-provider="google">Continue with Google</button><button type="button" class="secondary-button" data-cloud-provider="github">Continue with GitHub</button><small id="cloudAuthNote">Checking cloud account configuration…</small></div>
+    <div class="guest-divider"><span>or stay on this device</span></div>
     <div id="savedProfiles" class="saved-profiles hidden"><span>Saved on this device</span><div id="profileChoices" class="profile-choices"></div><div class="guest-divider"><span>or create another</span></div></div>
     <form id="profileForm" class="auth-form"><label>Profile name<input name="username" required minlength="2" maxlength="32" autocomplete="nickname"></label><button class="primary-button">Create device profile</button></form>
     <div id="authError" class="inline-error"></div><div class="guest-divider"><span>or</span></div><button id="guestButton" class="secondary-button full-button">Continue as guest</button>
   </dialog>
 
   <dialog id="gamesDialog" class="modal"><div class="modal-header"><div><span class="panel-kicker">Deck source</span><h2>Choose games to train</h2></div><button class="close-button" data-close="gamesDialog">×</button></div><div class="selection-row"><button id="selectAllGames" class="text-button">Select all</button><span id="selectedGameCount">0 selected</span></div><div id="gamePicker" class="game-picker"></div><div class="modal-footer"><button class="secondary-button" data-close="gamesDialog">Cancel</button><button id="applyGamesButton" class="primary-button">Train selected games</button></div></dialog>
+
+  <dialog id="analysisPgnDialog" class="modal pgn-modal"><div class="modal-header"><div><span class="panel-kicker">Analysis board</span><h2>Import PGN</h2></div><button class="close-button" data-close="analysisPgnDialog">×</button></div><div class="pgn-import-body"><label>Choose a PGN file<input id="analysisPgnFile" type="file" accept=".pgn,text/plain,application/x-chess-pgn"></label><label>Or paste PGN<textarea id="analysisPgnInput" rows="12" spellcheck="false" placeholder="[Event &quot;Game&quot;]&#10;&#10;1. e4 e5 2. Nf3 Nc6"></textarea></label><div id="analysisPgnError" class="inline-error" role="alert"></div></div><div class="modal-footer"><button class="secondary-button" data-close="analysisPgnDialog">Cancel</button><button id="analysisLoadPgnButton" class="primary-button">Load game</button></div></dialog>
 
   <dialog id="settingsDialog" class="modal settings-modal">
     <div class="modal-header"><div><span class="panel-kicker">Preferences</span><h2>Settings</h2></div><button class="close-button" data-close="settingsDialog">×</button></div>
@@ -120,7 +144,7 @@
       </div>
       <div class="settings-pane hidden" data-settings-pane="analysis"><section class="setting-section"><h3>Analysis engine</h3><div id="engineChoices" class="engine-choices"></div><p class="setting-description engine-privacy-note">Stockfish is free and local. Lc0 and Reckless require an active Plus entitlement from the account API; their endpoints keep provider credentials, billing, and quotas off the static site.</p></section></div>
       <div class="settings-pane hidden" data-settings-pane="effects"><section class="setting-section effects-settings"><div class="toggle-row"><div><h3>Motion and sounds</h3><p>Lightweight move animations and synthesized chess cues.</p></div><label class="switch"><input id="effectsToggle" type="checkbox" checked><span></span></label></div><label class="volume-row" for="masterVolume"><span>Master volume</span><input id="masterVolume" type="range" min="0" max="100" value="65"><output id="volumeOutput">65%</output></label><button id="testSoundButton" class="secondary-button">Play test sound</button></section><p class="license-note">Sounds are synthesized locally with Web Audio. The linked third-party sound-pack repository was not bundled because it does not provide a license.</p></div>
-      <div class="settings-pane hidden" data-settings-pane="account"><section class="setting-section"><h3 id="settingsAccountName">Guest</h3><p id="settingsAccountDetail" class="setting-description">Guest progress is saved only in this browser.</p><p id="settingsPlanDetail" class="setting-description plan-note">Plan: Free. Plus is required for Lc0, Reckless, and master decks.</p><p class="setting-description sync-note">Cross-device accounts, billing, and trusted entitlements require the optional account API described in the project architecture.</p><button id="logoutButton" class="secondary-button">Leave session</button></section></div>
+      <div class="settings-pane hidden" data-settings-pane="account"><section class="setting-section"><h3 id="settingsAccountName">Guest</h3><p id="settingsAccountDetail" class="setting-description">Guest progress is saved only in this browser.</p><p id="settingsPlanDetail" class="setting-description plan-note">Plan: Free. Plus is required for Lc0, Reckless, and master decks.</p><p class="setting-description sync-note" id="accountSyncNote">Sign in to sync preferences, saved games, reports, and puzzle review status.</p><div class="account-link-actions"><button type="button" class="secondary-button" data-link-provider="google">Link Google</button><button type="button" class="secondary-button" data-link-provider="github">Link GitHub</button></div><button id="logoutButton" class="secondary-button">Leave session</button></section></div>
     </div>
     <p class="license-note">Preferences are remembered for this Replay account. Lichess piece artwork is used under its open-source license.</p>
   </dialog>

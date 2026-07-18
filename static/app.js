@@ -1,13 +1,16 @@
 import { Chess } from "./vendor/chess/chess.js";
-import { importGames, getGameDetail as buildGameDetail } from "./lib/game-import.js";
+import { exportImportedGames, importGames, getGameDetail as buildGameDetail, restoreImportedGames } from "./lib/game-import.js";
 import { createEngine, engineDescriptor, engineDescriptors, SEARCH_DEPTH } from "./lib/engine-providers.js";
 import { activateDeviceProfile, clearProfileSession, continueAsGuest, createDeviceProfile, hasPremiumEntitlement, listDeviceProfiles, restoreProfileSession } from "./lib/profile-store.js";
-import { alternativeMoves, analyzeSacrificeLine, BRILLIANCY_THRESHOLDS, explainBrilliancy, findSacrificeCandidate, isSoundBrilliancy } from "./lib/brilliancy.js";
 import { classifyPuzzleEligibility } from "./lib/puzzle-rules.js";
+import { createBoardArrows } from "./lib/board-arrows.js";
 import { FEATURED_MASTERS, fetchGrandmasterHandles } from "./lib/masters.js";
 import { initAnalysisBoard } from "./lib/analysis-board.js";
+import { cloudConfigured, initCloudSession, loadCloudJson, queueCloudJson, signInOrLink, signOutCloud } from "./lib/auth-sync.js";
+import { initEnginePlay } from "./lib/engine-play.js";
+import { buildChessReport } from "./lib/chess-report.js";
 
-const ANALYSIS_VERSION = 9;
+const ANALYSIS_VERSION = 10;
 const DAY = 24 * 60 * 60 * 1000;
 const DEFAULT_PREFS = {
   siteTheme: "light",
@@ -29,7 +32,6 @@ const state = {
   displayName: "",
   source: "chesscom",
   scope: "recent",
-  focus: "all",
   games: [],
   window: "Last 7 days",
   selectedIds: new Set(),
@@ -54,7 +56,10 @@ const state = {
 };
 
 let generalAnalysisBoard = null;
+let enginePlay = null;
 let grandmastersLoading = null;
+let trainingArrowLayer = null;
+let lastCloudUserId = null;
 
 function escapeHtml(value) {
   return String(value ?? "").replace(/[&<>'"]/g, char => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", "'": "&#39;", '"': "&quot;" }[char]));
@@ -67,6 +72,9 @@ function prefsKey() { return `replay:prefs:${identityKey()}`; }
 function hasPlus() { return hasPremiumEntitlement(state.appUser); }
 function engineRequiresPlus(provider) { return provider.tier === "plus"; }
 function canUseEngine(provider) { return provider.configured && (!engineRequiresPlus(provider) || hasPlus()); }
+function libraryKey(source = state.source, username = state.username) { return `replay:library:${identityKey()}:${source}:${username.toLowerCase()}`; }
+function playedGamesKey() { return `replay:played-games:${identityKey()}`; }
+function reportKey(source, username) { return `replay:report:${identityKey()}:${source}:${username.toLowerCase()}`; }
 
 function loadJson(key, fallback) {
   try { return JSON.parse(localStorage.getItem(key)) ?? fallback; }
@@ -76,18 +84,17 @@ function loadJson(key, fallback) {
 function saveJson(key, value) {
   try { localStorage.setItem(key, JSON.stringify(value)); }
   catch { showToast("Browser storage is full; this session will still work."); }
+  queueCloudJson(key, value);
 }
 
 $("#importForm").addEventListener("submit", async event => {
   event.preventDefault();
   const username = $("#username").value.trim();
   const button = event.currentTarget.querySelector("button");
-  const focus = $("#studyFocus").value;
-  const scope = focus === "brilliancies" ? "latest100" : "recent";
-  await startStudy(username, $("#gameSource").value, scope, username, button, focus);
+  await startStudy(username, $("#gameSource").value, "recent", username, button);
 });
 
-async function startStudy(username, source, scope = "recent", displayName = username, button = null, focus = "all") {
+async function startStudy(username, source, scope = "recent", displayName = username, button = null) {
   $("#heroError").textContent = "";
   const fromMasters = !$("#mastersPage").classList.contains("hidden");
   if (button) button.disabled = true;
@@ -95,18 +102,36 @@ async function startStudy(username, source, scope = "recent", displayName = user
   const originalButtonLabel = buttonLabel?.textContent;
   if (buttonLabel) buttonLabel.textContent = "Loading games…";
   try {
-    const data = await importGames({ username, source, scope });
+    let data;
+    try {
+      data = await importGames({ username, source, scope });
+      saveJson(libraryKey(source, username), {
+        games: data.games,
+        window: data.window,
+        scope,
+        savedAt: Date.now(),
+        records: exportImportedGames(),
+      });
+    } catch (importError) {
+      const localSaved = loadJson(libraryKey(source, username), null);
+      const saved = await loadCloudJson(libraryKey(source, username), localSaved);
+      if (!saved?.records?.length) throw importError;
+      const games = restoreImportedGames(saved.records);
+      data = { games, window: `${saved.window || "Saved games"} · offline copy` };
+      showToast("The game service was unavailable, so Replay opened your saved games.");
+    }
     if (!data.games.length) throw new Error(data.emptyMessage || "No public games were found for that account.");
     state.username = username;
     state.displayName = displayName;
     state.source = source;
     state.scope = scope;
-    state.focus = focus;
     state.games = data.games;
     state.window = data.window;
     state.details.clear();
     state.selectedIds = new Set(data.games.map(game => game.id));
     localStorage.setItem("replay:last-user", username);
+    const cloudSchedule = await loadCloudJson(scheduleKey(), null);
+    if (cloudSchedule) localStorage.setItem(scheduleKey(), JSON.stringify(cloudSchedule));
     enterTrainer();
     if (data.notice) showToast(data.notice);
     await buildDeck();
@@ -131,8 +156,7 @@ function enterTrainer() {
   $("#trainer").classList.remove("hidden");
   $("#navTraining").classList.remove("hidden");
   setActiveNav("training");
-  const lesson = state.focus === "brilliancies" ? "brilliancy" : state.focus === "mistakes" ? "mistake" : "lesson";
-  $("#deckTitle").textContent = `${state.displayName || state.username}'s ${lesson}`;
+  $("#deckTitle").textContent = `${state.displayName || state.username}'s mistake`;
   $("#gameWindow").textContent = state.window;
   $("#gamesCount").textContent = state.games.length;
   applyPreferences();
@@ -145,7 +169,7 @@ function setActiveNav(name) {
 }
 
 function hideMainViews() {
-  for (const id of ["hero", "mastersPage", "analysisPage", "pricingPage", "trainer"]) $(`#${id}`).classList.add("hidden");
+  for (const id of ["hero", "mastersPage", "analysisPage", "playPage", "reportPage", "pricingPage", "trainer"]) $(`#${id}`).classList.add("hidden");
 }
 
 function goHome() {
@@ -190,6 +214,81 @@ function showPricing(reason = "") {
   if (reason) showToast(reason);
 }
 
+function showPlay() {
+  document.body.classList.remove("puzzle-room", "analysis-room");
+  hideMainViews();
+  $("#playPage").classList.remove("hidden");
+  setActiveNav("play");
+  if (!enginePlay) {
+    enginePlay = initEnginePlay({
+      getPieceSet: () => state.prefs.pieces,
+      getTheme: () => state.prefs.theme,
+      onSound: playSound,
+      onSnapshot: savePlayedGame,
+    });
+  }
+  enginePlay.refresh();
+}
+
+async function showReport() {
+  document.body.classList.remove("puzzle-room", "analysis-room");
+  hideMainViews();
+  $("#reportPage").classList.remove("hidden");
+  setActiveNav("report");
+  const username = $("#reportUsername").value.trim();
+  if (!username) return;
+  const source = $("#reportSource").value;
+  const saved = await loadCloudJson(reportKey(source, username), loadJson(reportKey(source, username), null));
+  if (saved) renderChessReport(saved);
+}
+
+function savePlayedGame(game) {
+  const key = playedGamesKey();
+  const games = loadJson(key, []);
+  const index = games.findIndex(item => item.id === game.id);
+  if (index >= 0) games[index] = game;
+  else games.unshift(game);
+  saveJson(key, games.sort((a, b) => b.updatedAt - a.updatedAt).slice(0, 50));
+}
+
+$("#reportForm").addEventListener("submit", async event => {
+  event.preventDefault();
+  const button = event.currentTarget.querySelector("button");
+  const username = $("#reportUsername").value.trim();
+  const source = $("#reportSource").value;
+  button.disabled = true;
+  $("#reportError").textContent = "";
+  $("#reportResults").classList.add("hidden");
+  $("#reportProgress").classList.remove("hidden");
+  $("#reportProgressBar").style.width = "0%";
+  try {
+    const report = await buildChessReport({
+      username,
+      source,
+      onProgress: progress => {
+        $("#reportProgressText").textContent = `Game ${progress.game} of ${progress.games} · move ${progress.move} of ${progress.moves}`;
+        $("#reportProgressBar").style.width = `${Math.round(((progress.game - 1) / progress.games + progress.move / progress.moves / progress.games) * 100)}%`;
+      },
+    });
+    saveJson(reportKey(source, username), report);
+    renderChessReport(report);
+  } catch (error) {
+    $("#reportError").textContent = error.message || "The report could not be completed.";
+  } finally {
+    button.disabled = false;
+    $("#reportProgress").classList.add("hidden");
+  }
+});
+
+function renderChessReport(report) {
+  $("#reportGames").textContent = report.games;
+  $("#reportPositions").textContent = report.positions.toLocaleString();
+  $("#reportMistakes").textContent = report.mistakes;
+  $("#reportRecommendations").innerHTML = report.recommendations.length ? report.recommendations.map((item, index) => `<article class="report-card ${index === 0 ? "top-theme" : ""}"><span class="report-count">${item.count}</span><div><span class="panel-kicker">${index === 0 ? "Top priority" : "Practice theme"}</span><h3>${escapeHtml(item.label)}</h3><p>${escapeHtml(item.advice)}</p><a href="${item.url}" target="_blank" rel="noreferrer">Practice labeled ${escapeHtml(item.label.toLowerCase())} puzzles on Lichess ↗</a></div></article>`).join("") : `<p class="report-empty">No repeated tactical weakness cleared the report threshold.</p>`;
+  $("#reportExamples").innerHTML = report.examples.length ? report.examples.map(example => `<article><span class="category">${escapeHtml(example.label)}</span><strong>vs ${escapeHtml(example.opponent)}</strong><small>${escapeHtml(example.date)} · lost ${(example.loss / 100).toFixed(1)} pawns</small><code>${escapeHtml(example.fen)}</code></article>`).join("") : `<p class="report-empty">No costly examples were found.</p>`;
+  $("#reportResults").classList.remove("hidden");
+}
+
 async function buildDeck(force = false) {
   if (state.analyzing) return;
   const selectedGames = state.games.filter(game => state.selectedIds.has(game.id));
@@ -218,20 +317,18 @@ async function buildDeck(force = false) {
   try {
     for (const game of selectedGames) {
       const detail = await getGameDetail(game.id);
-      const cached = cache.games[game.id]?.[state.focus];
+      const cached = cache.games[game.id];
       let gamePuzzles = !force && cached?.engine === provider.fingerprint ? cached.puzzles : null;
       if (!gamePuzzles) {
         if (!engine) {
           engine = createEngine(provider.id);
           await engine.init();
         }
-        const target = state.focus === "brilliancies" ? "brilliancies" : state.focus === "mistakes" ? "mistakes" : "lessons";
-        $("#analysisTitle").textContent = `${provider.name} · finding ${target} vs ${game.opponent}`;
+        $("#analysisTitle").textContent = `${provider.name} · finding mistakes vs ${game.opponent}`;
         gamePuzzles = await analyzeGameInBrowser(engine, detail, game, (current, total) => {
           $("#analysisDetail").textContent = `Move ${current} of ${total} · depth ${SEARCH_DEPTH}`;
         });
-        cache.games[game.id] ||= {};
-        cache.games[game.id][state.focus] = { engine: provider.fingerprint, analyzedAt: Date.now(), puzzles: gamePuzzles };
+        cache.games[game.id] = { engine: provider.fingerprint, analyzedAt: Date.now(), puzzles: gamePuzzles };
         saveJson(analysisKey(), cache);
       }
       state.puzzles.push(...gamePuzzles);
@@ -269,8 +366,6 @@ async function analyzeGameInBrowser(engine, detail, game, onProgress) {
     const move = playerMoves[index];
     const fen = detail.frames[move.ply - 1].fen;
     onProgress(index + 1, playerMoves.length);
-    const sacrifice = findSacrificeCandidate(fen, move.uci);
-    if (state.focus === "brilliancies" && !sacrifice) continue;
     const best = await engine.evaluate(fen);
     if (!best.bestmove || best.bestmove === "(none)") continue;
     const playedMatchesBest = move.uci === best.bestmove || move.uci.slice(0, 4) === best.bestmove.slice(0, 4) && !best.bestmove[4];
@@ -279,30 +374,9 @@ async function analyzeGameInBrowser(engine, detail, game, onProgress) {
     const bestMoveInfo = findVerboseMove(position, best.bestmove);
     const bestSan = bestMoveInfo?.san || best.bestmove;
 
-    let played = playedMatchesBest ? best : null;
-    if (!playedMatchesBest && (state.focus !== "brilliancies" || sacrifice)) played = await engine.evaluate(fen, move.uci);
-    const playedValue = played ? scoreValue(played) : bestValue;
-    const loss = Math.max(0, bestValue - playedValue);
-
-    const keepsWinningMate = best.mate !== null && best.mate > 0 && played?.mate !== null && played.mate > 0;
-    const plausibleBrilliancy = keepsWinningMate || (loss <= BRILLIANCY_THRESHOLDS.maximumLoss && playedValue >= BRILLIANCY_THRESHOLDS.minimumEvaluation);
-    if (sacrifice && plausibleBrilliancy) {
-      const alternatives = alternativeMoves(fen, move.uci);
-      const alternative = alternatives.length ? await engine.evaluate(fen, alternatives) : null;
-      const alternativeValue = alternative ? scoreValue(alternative) : -100000;
-      const qualifies = isSoundBrilliancy({ loss, playedValue, alternativeValue, pieceCount: sacrifice.pieceCount, keepsWinningMate });
-      if (qualifies) {
-        const brilliantResult = { ...played, bestmove: move.uci, pv: played?.pv?.[0]?.slice(0, 4) === move.uci.slice(0, 4) ? played.pv : [move.uci, ...(played?.pv || [])] };
-        const sacrificeLine = analyzeSacrificeLine(fen, brilliantResult.pv, sacrifice.moverColor);
-        const brilliantSan = findVerboseMove(new Chess(fen), move.uci)?.san || move.san;
-        puzzles.push(makePuzzle(game, move, fen, "Brilliancy", loss, brilliantResult, brilliantSan, brilliantResult, engine.descriptor, {
-          impact: Math.max(sacrifice.investment, sacrificeLine.investment),
-          explanation: explainBrilliancy(sacrifice, sacrificeLine),
-        }));
-      }
-    }
-
-    if (state.focus !== "brilliancies" && !playedMatchesBest) {
+    if (!playedMatchesBest) {
+      const played = await engine.evaluate(fen, move.uci);
+      const playedValue = scoreValue(played);
       const eligibility = classifyPuzzleEligibility({
         bestValue,
         playedValue,
@@ -318,7 +392,7 @@ async function analyzeGameInBrowser(engine, detail, game, onProgress) {
   return puzzles;
 }
 
-function makePuzzle(game, move, fen, category, loss, best, bestSan, played, provider, extra = {}) {
+function makePuzzle(game, move, fen, category, loss, best, bestSan, played, provider) {
   return {
     id: `${game.id}:${move.ply}:${category.toLowerCase().replaceAll(" ", "-")}`,
     gameId: game.id,
@@ -327,8 +401,7 @@ function makePuzzle(game, move, fen, category, loss, best, bestSan, played, prov
     fen,
     category,
     loss: Math.min(loss, 100000),
-    impact: extra.impact ?? Math.min(loss, 100000),
-    explanation: extra.explanation || "",
+    impact: Math.min(loss, 100000),
     best: best.bestmove,
     bestSan,
     bestEval: formatEval(best),
@@ -409,10 +482,10 @@ async function loadPuzzle(puzzle) {
   const category = $("#puzzleCategory");
   category.textContent = "Your move";
   category.className = "category";
-  $("#puzzlePrompt").textContent = puzzle.category === "Brilliancy" ? "Find the brilliant move in this position" : "Find the best move in this position";
+  $("#puzzlePrompt").textContent = "Find the best move in this position";
   $("#puzzleOpponent").textContent = `vs ${puzzle.game.opponent}`;
   $("#puzzleMeta").textContent = `${puzzle.game.date} · ${puzzle.game.timeClass} · move ${puzzle.moveNumber}`;
-  $("#puzzleHint").textContent = puzzle.category === "Brilliancy" ? "Look for a sound sacrifice whose tactical point survives the best defense." : "Look for checks, captures, and forcing threats.";
+  $("#puzzleHint").textContent = "Look for checks, captures, and forcing threats.";
   const detail = await getGameDetail(puzzle.gameId);
   renderNotation(detail, puzzle, false);
 }
@@ -487,6 +560,7 @@ function attemptMove(from, to) {
   const move = state.puzzleChess.move({ from, to, promotion: candidate.promotion || "q" });
   state.selectedSquare = null;
   state.legalMoves = [];
+  clearArrows();
   renderBoard(`${move.from}${move.to}`);
   checkAttempt(move);
   return true;
@@ -499,7 +573,7 @@ function selectSquare(square) {
 }
 
 function startPointerDrag(event) {
-  if (state.phase !== "puzzle" || !state.puzzleChess || event.button > 0) return;
+  if (state.phase !== "puzzle" || !state.puzzleChess || event.button > 0 || event.shiftKey) return;
   const squareElement = event.currentTarget.closest(".square");
   const square = squareElement?.dataset.square;
   const piece = square && state.puzzleChess.get(square);
@@ -642,10 +716,9 @@ function revealSolution(correct) {
   $("#puzzleCategory").textContent = state.current.category;
   $("#puzzleCategory").className = `category ${categoryClass}`;
   $("#solutionKicker").textContent = `${correct ? "Correct" : "Solution"} · ${state.current.category}`;
-  const brilliant = state.current.category === "Brilliancy";
-  $("#solutionTitle").textContent = brilliant ? (state.current.explanation || "The sacrifice holds up to engine defense.") : correct ? "That is the move." : "This was the stronger move.";
-  $("#playedLabel").textContent = brilliant ? "Found in the game" : "Played in the game";
-  $("#bestLabel").textContent = brilliant ? "Brilliant move" : "Best move";
+  $("#solutionTitle").textContent = correct ? "That is the move." : "This was the stronger move.";
+  $("#playedLabel").textContent = "Played in the game";
+  $("#bestLabel").textContent = "Best move";
   $("#playedMove").textContent = state.current.playedSan;
   const providerName = state.current.engineName || engineDescriptor(state.prefs.engineProvider).name;
   $("#playedEval").textContent = `${providerName} ${state.current.playedEval}`;
@@ -657,18 +730,9 @@ function revealSolution(correct) {
   renderNotation(state.details.get(state.current.gameId), state.current, true);
 }
 
-function clearArrows() { $("#arrows").innerHTML = ""; }
+function clearArrows() { trainingArrowLayer?.clear(); }
 
-function drawArrow(uci, color) {
-  const flipped = state.current.game.playerColor === "black";
-  const point = square => {
-    const file = square.charCodeAt(0) - 97;
-    const rank = Number(square[1]) - 1;
-    return { x: (flipped ? 7 - file : file) * 100 + 50, y: (flipped ? rank : 7 - rank) * 100 + 50 };
-  };
-  const start = point(uci.slice(0,2)), end = point(uci.slice(2,4));
-  $("#arrows").innerHTML = `<defs><marker id="best-arrow" markerWidth="5" markerHeight="5" refX="3.5" refY="2.5" orient="auto"><path d="M0,0 L0,5 L5,2.5 z" fill="${color}"/></marker></defs><line x1="${start.x}" y1="${start.y}" x2="${end.x}" y2="${end.y}" stroke="${color}" stroke-width="17" stroke-linecap="round" opacity=".84" marker-end="url(#best-arrow)"/>`;
-}
+function drawArrow(uci, color) { trainingArrowLayer?.setSystemArrow(uci, color); }
 
 function setBoardMessage(text, type = "") {
   $("#boardMessageText").textContent = text;
@@ -787,6 +851,7 @@ function applyPreferences() {
   if (!state.analyzing) $("#engineName").textContent = provider.id === "stockfish-browser" ? `${provider.name} loads in your browser · ${tier}` : `${provider.name} · ${tier}`;
   if (state.puzzleChess) renderBoard();
   generalAnalysisBoard?.refresh();
+  enginePlay?.refresh();
 }
 
 function renderEngineChoices() {
@@ -910,6 +975,7 @@ function submitProfile(event) {
   submit.disabled = true;
   $("#authError").textContent = "";
   try {
+    signOutCloud().catch(console.error);
     state.appUser = createDeviceProfile(values.username);
     state.guest = false;
     loadAccountPreferences();
@@ -929,6 +995,7 @@ function renderProfileChoices() {
   $("#profileChoices").innerHTML = profiles.map(profile => `<button type="button" data-profile-id="${escapeHtml(profile.id)}"><span>${escapeHtml(profile.username)}</span><small>Device profile</small></button>`).join("");
   $$('[data-profile-id]').forEach(button => button.addEventListener("click", () => {
     try {
+      signOutCloud().catch(console.error);
       state.appUser = activateDeviceProfile(button.dataset.profileId);
       state.guest = false;
       loadAccountPreferences();
@@ -943,6 +1010,7 @@ function renderProfileChoices() {
 
 $("#profileForm").addEventListener("submit", submitProfile);
 $("#guestButton").addEventListener("click", () => {
+  signOutCloud().catch(console.error);
   state.appUser = null;
   state.guest = true;
   continueAsGuest();
@@ -956,7 +1024,8 @@ $("#authDialog").addEventListener("cancel", event => {
   if (!state.appUser && !state.guest) event.preventDefault();
 });
 
-$("#logoutButton").addEventListener("click", () => {
+$("#logoutButton").addEventListener("click", async () => {
+  if (state.appUser?.storage === "cloud") await signOutCloud().catch(error => showToast(error.message));
   state.appUser = null;
   state.guest = false;
   clearProfileSession();
@@ -980,20 +1049,83 @@ function updateIdentityUI() {
   $("#profileName").textContent = name;
   $("#profileDialogName").textContent = name;
   $("#settingsAccountName").textContent = name;
-  $("#settingsAccountDetail").textContent = state.appUser ? "This device profile keeps progress and preferences separate in this browser." : "Guest progress is saved only in this browser.";
+  const cloud = state.appUser?.storage === "cloud";
+  $("#settingsAccountDetail").textContent = cloud ? `${state.appUser.email || "Cloud account"} · remembered on this device.` : state.appUser ? "This device profile keeps progress and preferences separate in this browser." : "Guest progress is saved only in this browser.";
   $("#settingsPlanDetail").textContent = hasPlus()
     ? "Plan: Plus. Lc0, Reckless, and master decks are available while the account API reports an active entitlement."
     : "Plan: Free. Stockfish analysis stays local; Lc0, Reckless, and master decks require Plus.";
   $("#profileDialogName").textContent = `${name} · ${plan}`;
-  $("#logoutButton").textContent = state.appUser ? "Switch profile" : "Leave guest session";
+  $("#accountSyncNote").textContent = cloud ? "Preferences, saved games, reports, and puzzle review status sync through your Replay cloud account." : "Sign in to sync preferences, saved games, reports, and puzzle review status.";
+  $("#logoutButton").textContent = state.appUser ? (cloud ? "Sign out" : "Switch profile") : "Leave guest session";
+  $$("[data-link-provider]").forEach(button => {
+    const providerId = `${button.dataset.linkProvider}.com`;
+    button.classList.toggle("hidden", !cloud || state.appUser.providers?.includes(providerId));
+  });
 }
+
+function captureLocalMigration() {
+  const identity = identityKey();
+  const source = state.source;
+  const username = state.username;
+  return {
+    prefs: { ...state.prefs },
+    library: username ? loadJson(`replay:library:${identity}:${source}:${username.toLowerCase()}`, null) : null,
+    schedule: username ? loadJson(`replay:schedule:${identity}:${source}:${username.toLowerCase()}`, null) : null,
+    playedGames: loadJson(`replay:played-games:${identity}`, null),
+  };
+}
+
+async function activateCloudUser(user, migration = null) {
+  if (!user) return;
+  const previousPrefs = migration?.prefs || { ...state.prefs };
+  lastCloudUserId = user.id;
+  state.appUser = user;
+  state.guest = false;
+  clearProfileSession();
+  const key = prefsKey();
+  const cloudPrefs = await loadCloudJson(key, null);
+  if (cloudPrefs) localStorage.setItem(key, JSON.stringify(cloudPrefs));
+  else saveJson(key, previousPrefs);
+  if (migration?.playedGames?.length) {
+    const cloudGames = await loadCloudJson(playedGamesKey(), null);
+    if (!cloudGames) saveJson(playedGamesKey(), migration.playedGames);
+  }
+  if (state.username) {
+    const cloudLibrary = await loadCloudJson(libraryKey(), null);
+    if (!cloudLibrary && migration?.library) saveJson(libraryKey(), migration.library);
+    const cloudSchedule = await loadCloudJson(scheduleKey(), null);
+    if (cloudSchedule) localStorage.setItem(scheduleKey(), JSON.stringify(cloudSchedule));
+    else if (migration?.schedule) saveJson(scheduleKey(), migration.schedule);
+  }
+  loadAccountPreferences();
+  updateIdentityUI();
+  if ($("#authDialog").open) $("#authDialog").close();
+}
+
+async function handleCloudProvider(provider, button) {
+  button.disabled = true;
+  $("#authError").textContent = "";
+  try {
+    const migration = captureLocalMigration();
+    const user = await signInOrLink(provider);
+    await activateCloudUser(user, migration);
+    showToast(`${provider === "google" ? "Google" : "GitHub"} is connected to your Replay account.`);
+  } catch (error) {
+    $("#authError").textContent = error.message;
+    showToast(error.message);
+  } finally {
+    button.disabled = false;
+  }
+}
+
+$$("[data-cloud-provider]").forEach(button => button.addEventListener("click", () => handleCloudProvider(button.dataset.cloudProvider, button)));
+$$("[data-link-provider]").forEach(button => button.addEventListener("click", () => handleCloudProvider(button.dataset.linkProvider, button)));
 
 function masterCard(player, directory = false) {
   return `<article class="master-card ${directory ? "directory-card" : ""}">
     <div><h3>${escapeHtml(player.name || player.username)}</h3><p>chess.com/member/${escapeHtml(player.username)} · Plus master deck</p></div>
     <div class="study-actions">
-      <button type="button" data-master="${escapeHtml(player.username)}" data-master-name="${escapeHtml(player.name || player.username)}" data-focus="mistakes"><span>Learn from mistakes</span></button>
-      <button type="button" data-master="${escapeHtml(player.username)}" data-master-name="${escapeHtml(player.name || player.username)}" data-focus="brilliancies"><span>Learn from brilliancies</span></button>
+      <button type="button" data-master="${escapeHtml(player.username)}" data-master-name="${escapeHtml(player.name || player.username)}"><span>Learn from mistakes</span></button>
     </div>
   </article>`;
 }
@@ -1004,7 +1136,7 @@ function bindMasterActions(container) {
       showPricing("Master decks are a Replay Plus feature because they scan 100 grandmaster games per deck.");
       return;
     }
-    startStudy(button.dataset.master, "chesscom", "latest100", button.dataset.masterName, button, button.dataset.focus);
+    startStudy(button.dataset.master, "chesscom", "latest100", button.dataset.masterName, button);
   }));
 }
 
@@ -1040,16 +1172,12 @@ $("#gameSource").addEventListener("change", event => {
   $("#sourcePrefix").textContent = event.currentTarget.value === "lichess" ? "lichess.org/@/" : "chess.com/";
 });
 
-$("#studyFocus").addEventListener("change", event => {
-  $("#searchScopeText").textContent = event.currentTarget.value === "brilliancies"
-    ? "Search your latest 100 games for sound sacrifices"
-    : "Last 7 days, then latest 20 as fallback";
-});
-
 $("#brandHome").addEventListener("click", event => { event.preventDefault(); goHome(); });
 $("#navHome").addEventListener("click", goHome);
 $("#navMasters").addEventListener("click", showMasters);
 $("#navAnalysis").addEventListener("click", showAnalysis);
+$("#navPlay").addEventListener("click", showPlay);
+$("#navReport").addEventListener("click", showReport);
 $("#navPricing").addEventListener("click", () => showPricing());
 $("#navTraining").addEventListener("click", () => { if (state.games.length) enterTrainer(); });
 $("#gmSearch").addEventListener("input", event => renderGrandmasterDirectory(event.currentTarget.value));
@@ -1067,7 +1195,10 @@ function showToast(message) {
 }
 
 const lastUser = localStorage.getItem("replay:last-user");
-if (lastUser) $("#username").value = lastUser;
+if (lastUser) {
+  $("#username").value = lastUser;
+  $("#reportUsername").value = lastUser;
+}
 const restored = restoreProfileSession();
 state.appUser = restored.profile;
 state.guest = restored.guest;
@@ -1077,4 +1208,33 @@ renderFeaturedMasters();
 renderProfileChoices();
 updateIdentityUI();
 if (!state.appUser && !state.guest) $("#authDialog").showModal();
+if (!cloudConfigured()) {
+  $$("[data-cloud-provider]").forEach(button => button.disabled = true);
+  $("#cloudAuthNote").textContent = "Cloud sign-in is ready for a Firebase web configuration in static/config.js.";
+} else {
+  $$("[data-cloud-provider]").forEach(button => button.disabled = true);
+  $("#cloudAuthNote").textContent = "Google and GitHub sign-ins are remembered securely by Firebase.";
+  initCloudSession(async user => {
+    if (user) await activateCloudUser(user);
+    else if (lastCloudUserId && state.appUser?.storage === "cloud") {
+      lastCloudUserId = null;
+      state.appUser = null;
+      state.guest = false;
+      updateIdentityUI();
+      if (!$("#authDialog").open) $("#authDialog").showModal();
+    }
+  }).then(() => {
+    $$("[data-cloud-provider]").forEach(button => button.disabled = false);
+  }).catch(error => {
+    $("#cloudAuthNote").textContent = error.message;
+    $$("[data-cloud-provider]").forEach(button => button.disabled = true);
+  });
+}
+trainingArrowLayer = createBoardArrows({
+  board: $("#board"),
+  svg: $("#arrows"),
+  squareSelector: ".square",
+  squareData: "square",
+  isFlipped: () => state.current?.game.playerColor === "black",
+});
 renderBoard();

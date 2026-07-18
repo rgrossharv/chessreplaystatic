@@ -20,7 +20,32 @@ Free versus Plus state, but the snapshot is only advisory. The account API is
 the source of truth for billing, subscriptions, quotas, and remote engine
 tokens.
 
-## Optional account and sync API
+## Cloud accounts and sync
+
+The static application includes an optional Firebase Authentication and Cloud
+Firestore adapter. Google and GitHub are the supported identity providers.
+Firebase must be configured for **one account per email address**. When a second
+provider returns an email already used by the other provider, Replay asks the
+user to prove access to the existing provider and links the new credential to
+the same Firebase UID.
+
+Replay stores only user-owned state below `users/{uid}/state/{stateId}`:
+
+- preferences;
+- imported game libraries and played-engine games;
+- spaced-repetition schedules and puzzle-solving status; and
+- generated chess-pattern reports.
+
+Deploy [`firestore.rules`](../firestore.rules) with the Firebase CLI so each UID
+can read and write only its own state. Firebase web configuration values are
+public identifiers, not secrets, but GitHub and Google OAuth client secrets must
+remain in their provider consoles.
+
+If Firebase is not configured, Replay keeps the existing guest and device
+profile behavior. The following API design remains an alternative for teams
+that do not want Firebase.
+
+## Optional custom account and sync API
 
 Use a hosted identity provider plus a durable database (for example, a small
 edge worker with managed SQL). Avoid inventing another password database inside
@@ -90,6 +115,15 @@ must preserve that perspective for both unrestricted and `searchMoves` calls.
 Returning this small contract keeps puzzle generation independent from any
 specific vendor. A future asynchronous gateway can add a job resource while
 preserving the same final result shape.
+
+## Browser play engines
+
+Stockfish is already vendored. Reckless is loaded through the framework-free
+`RecklessEngine` adapter from `static/vendor/reckless/`; run
+`sh scripts/install-reckless.sh /path/to/recklesschessweb/dist` after building
+the Reckless browser repository, then enable it in `static/config.js`. The
+roughly 61.5 MiB generated WASM chunks are not committed by the upstream browser
+repository, so they cannot be reconstructed from its Git checkout alone.
 
 ## Security boundary
 

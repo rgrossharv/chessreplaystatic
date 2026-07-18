@@ -7,6 +7,14 @@
  */
 const defaults = {
   accountApiBase: "",
+  firebase: null,
+  firebaseSdkVersion: "12.16.0",
+  browserEngines: {
+    reckless: {
+      enabled: false,
+      assetBaseUrl: "./vendor/reckless/",
+    },
+  },
   remoteEngines: [
     {
       id: "lc0",
@@ -34,5 +42,9 @@ const overrides = globalThis.REPLAY_CONFIG || {};
 export const replayConfig = Object.freeze({
   ...defaults,
   ...overrides,
+  browserEngines: {
+    ...defaults.browserEngines,
+    ...(overrides.browserEngines || {}),
+  },
   remoteEngines: overrides.remoteEngines || defaults.remoteEngines,
 });
