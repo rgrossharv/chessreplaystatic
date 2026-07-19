@@ -93,6 +93,9 @@ preserving the same final result shape.
 
 ## Local Reckless provider
 
+The browser provider is an alpha feature. Its UI must disclose that status and
+the possible 61.5 MiB first-use download before a visitor starts analysis.
+
 `BrowserReckless` adapts the vendored `RecklessEngine` package to the same
 `init()`, `evaluate(fen, searchMoves)`, and `close()` contract as Stockfish. The
 adapter dynamically imports the small package wrapper, and neither that wrapper,

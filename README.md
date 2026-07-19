@@ -3,7 +3,9 @@
 Replay imports public Chess.com and Lichess games and turns important mistakes
 and engine-confirmed brilliancies into a spaced-repetition training deck. The production app is now a static web
 site: public-game import, PGN parsing, legal move handling, puzzle creation, and
-Stockfish 18 and Reckless analysis all run in the visitor's browser.
+Stockfish 18 and Reckless analysis all run in the visitor's browser. The
+Reckless browser integration is alpha software and may download about 61.5 MiB
+of engine files when it is first used.
 
 ## Run it locally
 
@@ -66,9 +68,10 @@ boundaries are documented in [`docs/architecture.md`](docs/architecture.md).
   used. If an account has fewer than twenty total public standard games, Replay
   imports all available games and says so explicitly. Missing usernames and
   accounts with no usable public games are separate error states.
-- Free analysis uses Stockfish 18 or Reckless in the visitor's browser. Reckless
-  downloads about 61.5 MiB the first time it is initialized, remains entirely
-  local, and uses a single-threaded 50,000-node search. Plus analysis uses
+- Free analysis uses Stockfish 18 or Reckless in the visitor's browser. The
+  Reckless browser build is alpha software; it may need to download about 61.5
+  MiB the first time it is initialized, remains entirely local, and uses a
+  single-threaded 50,000-node search. Plus analysis uses
   separately configured Lc0 cloud or Reckless cloud compute gateways.
 - Master decks are a Plus feature. A master deck is built from a verified
   Chess.com grandmaster account in the titled-player directory or the featured
@@ -127,6 +130,11 @@ If either browser engine cannot start, Replay shows the worker, download, or
 unsupported-browser failure instead of silently falling back to empty analysis.
 
 ## Browser Reckless integration
+
+The browser Reckless integration is currently alpha software. Visitors should
+expect a possible 61.5 MiB download when they start Reckless analysis for the
+first time, along with higher memory, battery, and mobile-data use than
+Stockfish's lite browser build.
 
 The local provider is `reckless-browser`; the optional paid gateway remains
 `reckless`. Selecting the provider does not fetch the engine. Initialization

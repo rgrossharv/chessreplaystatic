@@ -803,7 +803,11 @@ function renderEngineChoices() {
   $("#engineChoices").innerHTML = engineDescriptors().map(provider => {
     const requiresPlus = engineRequiresPlus(provider);
     const available = canUseEngine(provider);
-    const badge = !provider.configured ? "Endpoint needed" : requiresPlus ? (hasPlus() ? "Plus active" : "Plus") : "Included";
+    const badge = !provider.configured
+      ? "Endpoint needed"
+      : requiresPlus
+        ? (hasPlus() ? "Plus active" : "Plus")
+        : provider.releaseStage === "alpha" ? "Included · Alpha" : "Included";
     return `<button type="button" data-engine-provider="${provider.id}" class="${requiresPlus && !available ? "locked" : ""}" ${provider.configured ? "" : "disabled"}>
     <span><strong>${escapeHtml(provider.selectorName || provider.name)}</strong><small>${escapeHtml(provider.detail || "Remote analysis")}</small>${provider.caution ? `<small>${escapeHtml(provider.caution)}</small>` : ""}</span>
     <em>${badge}</em>
@@ -823,7 +827,10 @@ function renderEngineChoices() {
     generalAnalysisBoard?.cancel();
     state.prefs.engineProvider = button.dataset.engineProvider;
     savePreferences();
-    showToast(`${engineDescriptor(state.prefs.engineProvider).name} selected for new analysis.`);
+    const selected = engineDescriptor(state.prefs.engineProvider);
+    showToast(selected.id === "reckless-browser"
+      ? "Reckless alpha selected. Starting analysis may download about 61.5 MiB to this browser."
+      : `${selected.name} selected for new analysis.`);
   }));
   applyPreferences();
 }

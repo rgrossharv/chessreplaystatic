@@ -20,10 +20,11 @@ const browserDescriptor = {
 
 const recklessBrowserDescriptor = {
   id: "reckless-browser",
-  name: "Reckless",
-  selectorName: "Reckless — browser",
-  detail: "Runs privately in this browser · 61.5 MiB first-use download",
-  caution: "Single-threaded browser engine. It may be slower than native Reckless and can use substantial memory, battery, and mobile data.",
+  name: "Reckless (alpha)",
+  selectorName: "Reckless browser — Alpha",
+  detail: "Runs privately in this browser · may require a 61.5 MiB first-use download",
+  caution: "Alpha software. This single-threaded browser build may be slower than native Reckless and can use substantial memory, battery, and mobile data.",
+  releaseStage: "alpha",
   tier: "free",
   configured: true,
   local: true,

@@ -56,6 +56,9 @@ test("registers distinct browser and cloud Reckless descriptors", () => {
   const descriptor = engineDescriptor("reckless-browser");
   assert.equal(descriptor.tier, "free");
   assert.equal(descriptor.local, true);
+  assert.equal(descriptor.releaseStage, "alpha");
+  assert.match(descriptor.selectorName, /Alpha/);
+  assert.match(descriptor.detail, /61\.5 MiB first-use download/);
   assert.equal(descriptor.supportsConstrainedSearch, true);
   assert.match(descriptor.fingerprint, new RegExp(`nodes-${RECKLESS_NODE_LIMIT}$`));
 });
