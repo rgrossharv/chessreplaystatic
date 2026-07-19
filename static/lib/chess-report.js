@@ -84,7 +84,7 @@ function motifFor(fen, bestUci, best, loss) {
   if (!move) return "defensiveMove";
   chess.move(move);
   const valuableTargets = attackedTargets(chess, move.to).filter(piece => PIECE_VALUE[piece.type] >= 3);
-  if (valuableTargets.length >= 2 || valuableTargets.some(piece => piece.type === "k") && valuableTargets.length >= 1) return "fork";
+  if (valuableTargets.length >= 2) return "fork";
   if (move.san.includes("+") || move.san.includes("#") || best.mate > 0) return "check";
   if (!move.captured) {
     const before = new Chess(fen);
@@ -104,13 +104,22 @@ function punishmentMotif(fen, playedUci, playedResult, loss) {
   const motif = motifFor(chess.fen(), reply, playedResult, loss);
   if (motif === "fork") return "forkVulnerability";
   if (motif === "discoveredAttack") return "discoveredVulnerability";
+  if (motif === "check") return "check";
   return null;
 }
 
-export async function buildChessReport({ username, source, onProgress }) {
-  const imported = await importGames({ username, source, scope: "latest100" });
-  if (!imported.games.length) throw new Error("No public standard games were found for that account.");
-  const engine = createEngine("stockfish-browser");
+export async function buildChessReport({
+  username,
+  source,
+  importedGames = null,
+  onProgress,
+  engineFactory = createEngine,
+  gameDetail = getGameDetail,
+  gameImporter = importGames,
+}) {
+  const imported = importedGames || await gameImporter({ username, source, scope: "latest100" });
+  if (!imported.games.length) throw new Error("No standard chess games were available for this report.");
+  const engine = engineFactory("stockfish-browser");
   await engine.init();
   const counts = Object.fromEntries(Object.keys(THEMES).map(key => [key, 0]));
   const examples = [];
@@ -119,7 +128,7 @@ export async function buildChessReport({ username, source, onProgress }) {
   try {
     for (let gameIndex = 0; gameIndex < imported.games.length; gameIndex += 1) {
       const game = imported.games[gameIndex];
-      const detail = getGameDetail(game.id);
+      const detail = gameDetail(game.id);
       const parity = game.playerColor === "white" ? 1 : 0;
       const moves = detail.moves.filter(move => move.ply % 2 === parity);
       for (let index = 0; index < moves.length; index += 1) {
@@ -143,6 +152,11 @@ export async function buildChessReport({ username, source, onProgress }) {
               bestMove: best.bestmove,
               playedMove: move.uci,
               loss,
+              consequence: played.mate !== null && played.mate < 0
+                ? `allowed mate in ${Math.abs(played.mate)}`
+                : best.mate !== null && best.mate > 0
+                  ? `missed mate in ${best.mate}`
+                  : `lost ${(loss / 100).toFixed(1)} pawns`,
               opponent: game.opponent,
               date: game.date,
             });

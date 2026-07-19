@@ -1,5 +1,5 @@
 import { Chess } from "./vendor/chess/chess.js";
-import { exportImportedGames, importGames, getGameDetail as buildGameDetail, restoreImportedGames } from "./lib/game-import.js";
+import { exportImportedGames, importGames, importPgnText, getGameDetail as buildGameDetail, restoreImportedGames } from "./lib/game-import.js";
 import { createEngine, engineDescriptor, engineDescriptors, RECKLESS_NODE_LIMIT, SEARCH_DEPTH } from "./lib/engine-providers.js";
 import { activateDeviceProfile, clearProfileSession, continueAsGuest, createDeviceProfile, hasPremiumEntitlement, listDeviceProfiles, restoreProfileSession } from "./lib/profile-store.js";
 import { classifyPuzzleEligibility } from "./lib/puzzle-rules.js";
@@ -60,6 +60,7 @@ let enginePlay = null;
 let grandmastersLoading = null;
 let trainingArrowLayer = null;
 let lastCloudUserId = null;
+let pgnImportTarget = "deck";
 
 function escapeHtml(value) {
   return String(value ?? "").replace(/[&<>'"]/g, char => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", "'": "&#39;", '"': "&quot;" }[char]));
@@ -95,10 +96,33 @@ function saveJson(key, value) {
 
 $("#importForm").addEventListener("submit", async event => {
   event.preventDefault();
+  const source = $("#gameSource").value;
+  if (source === "pgn") {
+    openTournamentImport("deck");
+    return;
+  }
   const username = $("#username").value.trim();
   const button = event.currentTarget.querySelector("button");
-  await startStudy(username, $("#gameSource").value, "recent", username, button);
+  await startStudy(username, source, "recent", username, button);
 });
+
+async function activateStudyData({ data, username, source, scope = "recent", displayName = username }) {
+  if (!data.games.length) throw new Error(data.emptyMessage || "No games were found for this deck.");
+  state.username = username;
+  state.displayName = displayName;
+  state.source = source;
+  state.scope = scope;
+  state.games = data.games;
+  state.window = data.window;
+  state.details.clear();
+  state.selectedIds = new Set(data.games.map(game => game.id));
+  if (source !== "pgn") localStorage.setItem("replay:last-user", username);
+  const cloudSchedule = await loadCloudJson(scheduleKey(), null);
+  if (cloudSchedule) localStorage.setItem(scheduleKey(), JSON.stringify(cloudSchedule));
+  enterTrainer();
+  if (data.notice) showToast(data.notice);
+  await buildDeck();
+}
 
 async function startStudy(username, source, scope = "recent", displayName = username, button = null) {
   $("#heroError").textContent = "";
@@ -126,21 +150,7 @@ async function startStudy(username, source, scope = "recent", displayName = user
       data = { games, window: `${saved.window || "Saved games"} · offline copy` };
       showToast("The game service was unavailable, so Replay opened your saved games.");
     }
-    if (!data.games.length) throw new Error(data.emptyMessage || "No public games were found for that account.");
-    state.username = username;
-    state.displayName = displayName;
-    state.source = source;
-    state.scope = scope;
-    state.games = data.games;
-    state.window = data.window;
-    state.details.clear();
-    state.selectedIds = new Set(data.games.map(game => game.id));
-    localStorage.setItem("replay:last-user", username);
-    const cloudSchedule = await loadCloudJson(scheduleKey(), null);
-    if (cloudSchedule) localStorage.setItem(scheduleKey(), JSON.stringify(cloudSchedule));
-    enterTrainer();
-    if (data.notice) showToast(data.notice);
-    await buildDeck();
+    await activateStudyData({ data, username, source, scope, displayName });
   } catch (error) {
     if (fromMasters) {
       showMasters();
@@ -157,7 +167,7 @@ async function startStudy(username, source, scope = "recent", displayName = user
 
 function enterTrainer() {
   document.body.classList.add("puzzle-room");
-  document.body.classList.remove("analysis-room");
+  document.body.classList.remove("analysis-room", "play-room");
   hideMainViews();
   $("#trainer").classList.remove("hidden");
   $("#navTraining").classList.remove("hidden");
@@ -179,16 +189,14 @@ function hideMainViews() {
 }
 
 function goHome() {
-  document.body.classList.remove("puzzle-room");
-  document.body.classList.remove("analysis-room");
+  document.body.classList.remove("puzzle-room", "analysis-room", "play-room");
   hideMainViews();
   $("#hero").classList.remove("hidden");
   setActiveNav("home");
 }
 
 function showMasters() {
-  document.body.classList.remove("puzzle-room");
-  document.body.classList.remove("analysis-room");
+  document.body.classList.remove("puzzle-room", "analysis-room", "play-room");
   hideMainViews();
   $("#mastersPage").classList.remove("hidden");
   setActiveNav("masters");
@@ -196,7 +204,7 @@ function showMasters() {
 }
 
 function showAnalysis() {
-  document.body.classList.remove("puzzle-room");
+  document.body.classList.remove("puzzle-room", "play-room");
   document.body.classList.add("analysis-room");
   hideMainViews();
   $("#analysisPage").classList.remove("hidden");
@@ -212,8 +220,7 @@ function showAnalysis() {
 }
 
 function showPricing(reason = "") {
-  document.body.classList.remove("puzzle-room");
-  document.body.classList.remove("analysis-room");
+  document.body.classList.remove("puzzle-room", "analysis-room", "play-room");
   hideMainViews();
   $("#pricingPage").classList.remove("hidden");
   setActiveNav("pricing");
@@ -222,6 +229,7 @@ function showPricing(reason = "") {
 
 function showPlay() {
   document.body.classList.remove("puzzle-room", "analysis-room");
+  document.body.classList.add("play-room");
   hideMainViews();
   $("#playPage").classList.remove("hidden");
   setActiveNav("play");
@@ -237,13 +245,13 @@ function showPlay() {
 }
 
 async function showReport() {
-  document.body.classList.remove("puzzle-room", "analysis-room");
+  document.body.classList.remove("puzzle-room", "analysis-room", "play-room");
   hideMainViews();
   $("#reportPage").classList.remove("hidden");
   setActiveNav("report");
   const username = $("#reportUsername").value.trim();
-  if (!username) return;
   const source = $("#reportSource").value;
+  if (!username || source === "pgn") return;
   const saved = await loadCloudJson(reportKey(source, username), loadJson(reportKey(source, username), null));
   if (saved) renderChessReport(saved);
 }
@@ -259,10 +267,17 @@ function savePlayedGame(game) {
 
 $("#reportForm").addEventListener("submit", async event => {
   event.preventDefault();
-  const button = event.currentTarget.querySelector("button");
   const username = $("#reportUsername").value.trim();
   const source = $("#reportSource").value;
-  button.disabled = true;
+  if (source === "pgn") {
+    openTournamentImport("report");
+    return;
+  }
+  await runReportAnalysis({ username, source, button: event.currentTarget.querySelector("button") });
+});
+
+async function runReportAnalysis({ username, source, importedGames = null, button = null }) {
+  if (button) button.disabled = true;
   $("#reportError").textContent = "";
   $("#reportResults").classList.add("hidden");
   $("#reportProgress").classList.remove("hidden");
@@ -271,6 +286,7 @@ $("#reportForm").addEventListener("submit", async event => {
     const report = await buildChessReport({
       username,
       source,
+      importedGames,
       onProgress: progress => {
         $("#reportProgressText").textContent = `Game ${progress.game} of ${progress.games} · move ${progress.move} of ${progress.moves}`;
         $("#reportProgressBar").style.width = `${Math.round(((progress.game - 1) / progress.games + progress.move / progress.moves / progress.games) * 100)}%`;
@@ -281,8 +297,63 @@ $("#reportForm").addEventListener("submit", async event => {
   } catch (error) {
     $("#reportError").textContent = error.message || "The report could not be completed.";
   } finally {
-    button.disabled = false;
+    if (button) button.disabled = false;
     $("#reportProgress").classList.add("hidden");
+  }
+}
+
+function openTournamentImport(target) {
+  pgnImportTarget = target;
+  const isReport = target === "report";
+  $("#trainingPgnTitle").textContent = isReport ? "Build a report from PGN" : "Build a deck from PGN";
+  $("#trainingPgnDescription").textContent = isReport
+    ? "Upload one or more real tournament games, or paste complete PGN/SAN notation for a local chess report."
+    : "Upload one or more real tournament games, or paste PGN/SAN notation such as 1. e4 e5 2. Nf3 Nc6.";
+  $("#loadTrainingPgnButton").textContent = isReport ? "Analyze imported games" : "Build training deck";
+  $("#trainingPgnError").textContent = "";
+  if (!$("#trainingPgnDialog").open) $("#trainingPgnDialog").showModal();
+}
+
+$("#trainingPgnFile").addEventListener("change", async event => {
+  const file = event.currentTarget.files?.[0];
+  if (!file) return;
+  try {
+    $("#trainingPgnInput").value = await file.text();
+    $("#trainingPgnError").textContent = "";
+  } catch {
+    $("#trainingPgnError").textContent = "That file could not be read. Try pasting its PGN text instead.";
+  }
+});
+
+$("#loadTrainingPgnButton").addEventListener("click", async event => {
+  const button = event.currentTarget;
+  button.disabled = true;
+  $("#trainingPgnError").textContent = "";
+  try {
+    const data = await importPgnText({
+      text: $("#trainingPgnInput").value,
+      playerName: $("#trainingPgnPlayer").value,
+      fallbackColor: $("#trainingPgnColor").value,
+    });
+    const username = data.playerName || "Imported player";
+    if (pgnImportTarget === "report") {
+      $("#trainingPgnDialog").close();
+      await runReportAnalysis({ username, source: "pgn", importedGames: data, button: $("#reportForm button") });
+    } else {
+      saveJson(libraryKey("pgn", username), {
+        games: data.games,
+        window: data.window,
+        scope: "uploaded",
+        savedAt: Date.now(),
+        records: exportImportedGames(),
+      });
+      $("#trainingPgnDialog").close();
+      await activateStudyData({ data, username, source: "pgn", scope: "uploaded", displayName: username });
+    }
+  } catch (error) {
+    $("#trainingPgnError").textContent = error.message || "Those games could not be imported.";
+  } finally {
+    button.disabled = false;
   }
 });
 
@@ -291,7 +362,7 @@ function renderChessReport(report) {
   $("#reportPositions").textContent = report.positions.toLocaleString();
   $("#reportMistakes").textContent = report.mistakes;
   $("#reportRecommendations").innerHTML = report.recommendations.length ? report.recommendations.map((item, index) => `<article class="report-card ${index === 0 ? "top-theme" : ""}"><span class="report-count">${item.count}</span><div><span class="panel-kicker">${index === 0 ? "Top priority" : "Practice theme"}</span><h3>${escapeHtml(item.label)}</h3><p>${escapeHtml(item.advice)}</p><a href="${item.url}" target="_blank" rel="noreferrer">Practice labeled ${escapeHtml(item.label.toLowerCase())} puzzles on Lichess ↗</a></div></article>`).join("") : `<p class="report-empty">No repeated tactical weakness cleared the report threshold.</p>`;
-  $("#reportExamples").innerHTML = report.examples.length ? report.examples.map(example => `<article><span class="category">${escapeHtml(example.label)}</span><strong>vs ${escapeHtml(example.opponent)}</strong><small>${escapeHtml(example.date)} · lost ${(example.loss / 100).toFixed(1)} pawns</small><code>${escapeHtml(example.fen)}</code></article>`).join("") : `<p class="report-empty">No costly examples were found.</p>`;
+  $("#reportExamples").innerHTML = report.examples.length ? report.examples.map(example => `<article><span class="category">${escapeHtml(example.label)}</span><strong>vs ${escapeHtml(example.opponent)}</strong><small>${escapeHtml(example.date)} · ${escapeHtml(example.consequence || `lost ${(example.loss / 100).toFixed(1)} pawns`)}</small><code>${escapeHtml(example.fen)}</code></article>`).join("") : `<p class="report-empty">No costly examples were found.</p>`;
   $("#reportResults").classList.remove("hidden");
 }
 
@@ -301,7 +372,7 @@ async function buildDeck(force = false) {
   if (!selectedGames.length) return showToast("Select at least one game.");
   const provider = engineDescriptor(state.prefs.engineProvider);
   if (!canUseEngine(provider)) {
-    showPricing(`${provider.name} requires Replay Plus. Existing Plus-analyzed decks stay reviewable, but new remote analysis needs an active subscription.`);
+    showPricing(`${provider.name} uses hosted engine compute. Existing remote analysis stays reviewable, but new searches need an active monthly compute subscription.`);
     return;
   }
   state.analyzing = true;
@@ -769,7 +840,9 @@ function renderNotation(detail, puzzle, revealed) {
   $("#notationGame").textContent = `${puzzle.game.playerColor === "white" ? studiedName : puzzle.game.opponent} – ${puzzle.game.playerColor === "black" ? studiedName : puzzle.game.opponent}`;
   $("#notationResult").textContent = puzzle.game.result;
   $("#notationOpening").textContent = puzzle.game.opening;
-  $("#chessComLink").href = detail.url || "#";
+  const sourceLink = $("#chessComLink");
+  sourceLink.classList.toggle("hidden", !detail.url);
+  if (detail.url) sourceLink.href = detail.url;
   requestAnimationFrame(() => $("#notationList .current")?.scrollIntoView({ block: "center" }));
 }
 
@@ -857,7 +930,7 @@ function applyPreferences() {
   $$('[data-pieces]').forEach(button => button.classList.toggle("active", button.dataset.pieces === state.prefs.pieces));
   $$('[data-engine-provider]').forEach(button => button.classList.toggle("active", button.dataset.engineProvider === state.prefs.engineProvider));
   const provider = engineDescriptor(state.prefs.engineProvider);
-  const tier = engineRequiresPlus(provider) ? "Plus" : "Free";
+  const tier = engineRequiresPlus(provider) ? "Monthly compute" : "Free";
   if (!state.analyzing) $("#engineName").textContent = provider.local ? `${provider.name} runs in your browser · ${tier}` : `${provider.name} · ${tier}`;
   if (state.puzzleChess) renderBoard();
   generalAnalysisBoard?.refresh();
@@ -871,7 +944,7 @@ function renderEngineChoices() {
     const badge = !provider.configured
       ? "Endpoint needed"
       : requiresPlus
-        ? (hasPlus() ? "Plus active" : "Plus")
+        ? (hasPlus() ? "Compute active" : "Monthly compute")
         : provider.releaseStage === "alpha" ? "Included · Alpha" : "Included";
     return `<button type="button" data-engine-provider="${provider.id}" class="${requiresPlus && !available ? "locked" : ""}" ${provider.configured ? "" : "disabled"}>
     <span><strong>${escapeHtml(provider.selectorName || provider.name)}</strong><small>${escapeHtml(provider.detail || "Remote analysis")}</small>${provider.caution ? `<small>${escapeHtml(provider.caution)}</small>` : ""}</span>
@@ -883,7 +956,7 @@ function renderEngineChoices() {
     if (state.analyzing) return showToast("Finish the current deck analysis before changing engines.");
     const provider = engineDescriptor(button.dataset.engineProvider);
     if (!canUseEngine(provider)) {
-      showPricing(`${provider.name} is a Plus engine. Upgrade before starting new Lc0 or Reckless analysis.`);
+      showPricing(`${provider.name} uses hosted compute. Start a monthly compute subscription before running new remote analysis.`);
       return;
     }
     state.practiceEngine?.close();
@@ -926,16 +999,26 @@ $$('[data-pieces]').forEach(button => button.addEventListener("click", () => {
 
 $("#profileButton").addEventListener("click", () => {
   const name = state.appUser?.username || "Guest";
-  $("#profileDialogName").textContent = `${name} · ${hasPlus() ? "Plus active" : "Free"}`;
+  $("#profileDialogName").textContent = `${name} · ${hasPlus() ? "Compute active" : "Free"}`;
   updateStats();
   $("#profileDialog").showModal();
 });
 
-$("#changeAccountButton").addEventListener("click", () => {
-  $("#profileDialog").close();
+async function leaveCurrentSession() {
+  if (state.appUser?.storage === "cloud") await signOutCloud().catch(error => showToast(error.message));
+  state.appUser = null;
+  state.guest = false;
+  clearProfileSession();
+  if ($("#settingsDialog").open) $("#settingsDialog").close();
+  if ($("#profileDialog").open) $("#profileDialog").close();
   goHome();
-  $("#username").focus();
-});
+  updateIdentityUI();
+  renderEngineChoices();
+  renderProfileChoices();
+  if (!$("#authDialog").open) $("#authDialog").showModal();
+}
+
+$("#changeAccountButton").addEventListener("click", leaveCurrentSession);
 
 function savePreferences() {
   saveJson(prefsKey(), state.prefs);
@@ -1043,18 +1126,7 @@ $("#authDialog").addEventListener("cancel", event => {
   if (!state.appUser && !state.guest) event.preventDefault();
 });
 
-$("#logoutButton").addEventListener("click", async () => {
-  if (state.appUser?.storage === "cloud") await signOutCloud().catch(error => showToast(error.message));
-  state.appUser = null;
-  state.guest = false;
-  clearProfileSession();
-  $("#settingsDialog").close();
-  goHome();
-  updateIdentityUI();
-  renderEngineChoices();
-  renderProfileChoices();
-  $("#authDialog").showModal();
-});
+$("#logoutButton").addEventListener("click", leaveCurrentSession);
 
 function loadAccountPreferences() {
   state.prefs = { ...DEFAULT_PREFS, ...loadJson(prefsKey(), {}) };
@@ -1064,15 +1136,15 @@ function loadAccountPreferences() {
 
 function updateIdentityUI() {
   const name = state.appUser?.username || "Guest";
-  const plan = hasPlus() ? "Plus active" : "Free";
+  const plan = hasPlus() ? "Compute active" : "Free";
   $("#profileName").textContent = name;
   $("#profileDialogName").textContent = name;
   $("#settingsAccountName").textContent = name;
   const cloud = state.appUser?.storage === "cloud";
   $("#settingsAccountDetail").textContent = cloud ? `${state.appUser.email || "Cloud account"} · remembered on this device.` : state.appUser ? "This device profile keeps progress and preferences separate in this browser." : "Guest progress is saved only in this browser.";
   $("#settingsPlanDetail").textContent = hasPlus()
-    ? "Plan: Plus. Both browser engines remain local; Lc0 cloud, Reckless cloud, and master decks are available while the account API reports an active entitlement."
-    : "Plan: Free. Stockfish 18 and Reckless browser analysis stay local; Lc0 cloud, Reckless cloud, and master decks require Plus.";
+    ? "Monthly compute is active for hosted Lc0 and Reckless searches. Local engines, reports, and master games remain free."
+    : "Plan: Free. Stockfish 18, Reckless browser, reports, and master games are included; only hosted engine compute requires a monthly subscription.";
   $("#profileDialogName").textContent = `${name} · ${plan}`;
   $("#accountSyncNote").textContent = cloud ? "Preferences, saved games, reports, and puzzle review status sync through your Replay cloud account." : "Sign in to sync preferences, saved games, reports, and puzzle review status.";
   $("#logoutButton").textContent = state.appUser ? (cloud ? "Sign out" : "Switch profile") : "Leave guest session";
@@ -1127,6 +1199,10 @@ async function handleCloudProvider(provider, button) {
   try {
     const migration = captureLocalMigration();
     const user = await signInOrLink(provider);
+    if (!user) {
+      $("#cloudAuthNote").textContent = "Complete sign-in on the provider page; Replay will restore this account when you return.";
+      return;
+    }
     await activateCloudUser(user, migration);
     showToast(`${provider === "google" ? "Google" : "GitHub"} is connected to your Replay account.`);
   } catch (error) {
@@ -1142,7 +1218,7 @@ $$("[data-link-provider]").forEach(button => button.addEventListener("click", ()
 
 function masterCard(player, directory = false) {
   return `<article class="master-card ${directory ? "directory-card" : ""}">
-    <div><h3>${escapeHtml(player.name || player.username)}</h3><p>chess.com/member/${escapeHtml(player.username)} · Plus master deck</p></div>
+    <div><h3>${escapeHtml(player.name || player.username)}</h3><p>chess.com/member/${escapeHtml(player.username)} · Free 100-game master deck</p></div>
     <div class="study-actions">
       <button type="button" data-master="${escapeHtml(player.username)}" data-master-name="${escapeHtml(player.name || player.username)}"><span>Learn from mistakes</span></button>
     </div>
@@ -1151,10 +1227,6 @@ function masterCard(player, directory = false) {
 
 function bindMasterActions(container) {
   container.querySelectorAll("[data-master]").forEach(button => button.addEventListener("click", () => {
-    if (!hasPlus()) {
-      showPricing("Master decks are a Replay Plus feature because they scan 100 grandmaster games per deck.");
-      return;
-    }
     startStudy(button.dataset.master, "chesscom", "latest100", button.dataset.masterName, button);
   }));
 }
@@ -1187,9 +1259,28 @@ async function loadGrandmasterDirectory() {
   }
 }
 
-$("#gameSource").addEventListener("change", event => {
-  $("#sourcePrefix").textContent = event.currentTarget.value === "lichess" ? "lichess.org/@/" : "chess.com/";
-});
+function updateGameSourceUI() {
+  const source = $("#gameSource").value;
+  const isPgn = source === "pgn";
+  $(".username-field").classList.toggle("hidden", isPgn);
+  $("#username").required = !isPgn;
+  $("#sourcePrefix").textContent = source === "lichess" ? "lichess.org/@/" : "chess.com/";
+  $("#importForm button span").textContent = isPgn ? "Upload games" : "Build deck";
+  $("#searchScopeText").textContent = isPgn ? "Upload a .pgn/.txt file or paste tournament move notation" : "Last 7 days, then latest 20 as fallback";
+  $("#heroError").textContent = "";
+}
+
+function updateReportSourceUI() {
+  const isPgn = $("#reportSource").value === "pgn";
+  $("#reportUsername").classList.toggle("hidden", isPgn);
+  $("#reportUsername").required = !isPgn;
+  $("#reportForm button").textContent = isPgn ? "Upload games" : "Analyze up to 100 games";
+  $("#reportScopeText").textContent = isPgn ? "Upload a .pgn/.txt file or paste tournament move notation" : "Up to 100 recent public games";
+  $("#reportError").textContent = "";
+}
+
+$("#gameSource").addEventListener("change", updateGameSourceUI);
+$("#reportSource").addEventListener("change", updateReportSourceUI);
 
 $("#brandHome").addEventListener("click", event => { event.preventDefault(); goHome(); });
 $("#navHome").addEventListener("click", goHome);
@@ -1201,7 +1292,7 @@ $("#navPricing").addEventListener("click", () => showPricing());
 $("#navTraining").addEventListener("click", () => { if (state.games.length) enterTrainer(); });
 $("#gmSearch").addEventListener("input", event => renderGrandmasterDirectory(event.currentTarget.value));
 $("#pricingStartFree").addEventListener("click", () => { goHome(); $("#username").focus(); });
-$("#pricingUpgradeButton").addEventListener("click", () => showToast("Connect the account API to start checkout and return trusted Plus entitlements."));
+$("#pricingUpgradeButton").addEventListener("click", () => showToast("Connect the account API to purchase monthly hosted-engine compute and return trusted quota entitlements."));
 
 $$('[data-close]').forEach(button => button.addEventListener("click", () => $(`#${button.dataset.close}`).close()));
 
@@ -1226,6 +1317,8 @@ renderEngineChoices();
 renderFeaturedMasters();
 renderProfileChoices();
 updateIdentityUI();
+updateGameSourceUI();
+updateReportSourceUI();
 if (!state.appUser && !state.guest) $("#authDialog").showModal();
 if (!cloudConfigured()) {
   $$("[data-cloud-provider]").forEach(button => button.disabled = true);

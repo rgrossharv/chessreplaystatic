@@ -50,8 +50,8 @@ All application and asset URLs are relative, so the site works under the
   sacrifices—and leaves the final classification to constrained engine search.
 - `static/lib/analysis-board.js` provides click and drag legal play, PGN import,
   clickable notation history, position editing, FEN loading, arrows, live
-  analysis, and progressive per-game accuracy through the selected engine
-  provider.
+  analysis, explicit queen/rook/bishop/knight promotion, and progressive
+  per-game accuracy through the selected engine provider.
 - `static/lib/board-arrows.js` provides reusable right-drag board annotations for
   both training puzzles and the general analysis board.
 - `static/lib/profile-store.js` replaces misleading server-local passwords with
@@ -59,12 +59,16 @@ All application and asset URLs are relative, so the site works under the
   remain separate per profile in the browser.
 - `static/lib/auth-sync.js` adds optional remembered Google and GitHub sign-in
   through Firebase, links matching-email providers to one UID, and syncs saved
-  games, preferences, reports, and review schedules through Firestore.
-- `static/lib/engine-play.js` provides a playable Stockfish board and the
-  browser-native Reckless integration boundary.
-- `static/lib/chess-report.js` scans up to 100 public games with local Stockfish,
-  groups costly moves into tactical patterns, and links the strongest patterns
-  to labeled Lichess puzzle themes.
+  games, preferences, reports, and review schedules through Firestore. It falls
+  back to redirect sign-in when a browser blocks the provider popup.
+- `static/lib/engine-play.js` provides a playable Stockfish/Reckless board with
+  standard starts plus knight, rook, and queen odds for either side, including
+  an explicit promotion-piece choice that defaults to queen.
+- `static/lib/chess-report.js` scans up to 100 public or PGN-imported games with
+  local Stockfish, groups costly moves into tactical patterns, and links the
+  strongest patterns to labeled Lichess puzzle themes.
+- `static/lib/game-import.js` accepts Chess.com, Lichess, multi-game PGN files,
+  and pasted SAN move notation for training decks and chess reports.
 - `static/config.js` contains public deployment configuration. Never put engine
   provider keys or other secrets there.
 
@@ -91,8 +95,10 @@ firebase: {
 ```
 
 Authorize the GitHub Pages domain in Firebase Authentication and in both OAuth
-provider configurations. The SDK uses local auth persistence so an account is
-remembered after the browser restarts.
+provider configurations. Add `localhost` as an authorized domain while testing
+with `./run.sh`. The SDK uses local auth persistence so an account is remembered
+after the browser restarts; blocked popups continue through Firebase's redirect
+flow instead.
 
 ## Included Reckless browser assets
 
@@ -115,9 +121,9 @@ vendored package with a newly verified RecklessWeb build.
 - Free analysis uses Stockfish 18 or Reckless in the visitor's browser. The
   Reckless browser build is alpha software; it may need to download about 61.5
   MiB the first time it is initialized, remains entirely local, and uses a
-  single-threaded 50,000-node search. Plus analysis uses
+  single-threaded 200,000-node search. A monthly compute subscription provides
   separately configured Lc0 cloud or Reckless cloud compute gateways.
-- Master decks are a Plus feature. A master deck is built from a verified
+- Master decks are free. A master deck is built from a verified
   Chess.com grandmaster account in the titled-player directory or the featured
   master list, scanning that player's latest 100 public standard games.
 - A position becomes a puzzle when the played move loses at least three pawns,
@@ -138,18 +144,19 @@ Replay exposes the product boundary in the app:
 
 | Tier | Included |
 | --- | --- |
-| Free | Public-game import, local Stockfish 18 or Reckless browser analysis, browser device profiles, review scheduling, and cached local decks. |
-| Plus | Lc0 cloud analysis, Reckless cloud analysis, and master decks from verified grandmaster accounts. |
+| Free | Public-game and PGN import, master decks from the latest 100 public games of verified grandmasters, local Stockfish 18 or Reckless browser analysis, reports, device profiles, review scheduling, and cached local decks. |
+| Monthly compute | Hosted Lc0 and Reckless analysis through separately configured compute gateways. This subscription purchases engine compute only; it does not unlock master games or other chess content. |
 
 The static app can show and cache entitlement state, but it is not the authority
-for billing. The account API must decide whether a user is Plus, mint short-lived
-engine tokens, and enforce quotas server-side.
+for billing. The account API must decide whether a user has monthly compute,
+mint short-lived engine tokens, and enforce quotas server-side.
 
 If a user subscribes mid-session, the current local-engine deck remains available;
-new analysis can use Lc0 cloud or Reckless cloud after the account API returns a Plus
-entitlement and engine token. If a subscription lapses, previously analyzed Plus
-content remains visible and reviewable in the user's deck, but new Plus engine
-analysis and new master-deck imports are blocked until the entitlement returns.
+new analysis can use Lc0 cloud or Reckless cloud after the account API returns a
+compute entitlement and engine token. If a subscription lapses, previously
+computed remote analysis remains visible and reviewable, but new hosted-engine
+requests are blocked until the entitlement returns. Master-deck imports remain
+free and available regardless of subscription state.
 
 ## Browser and mobile support
 
@@ -180,7 +187,7 @@ wrapper resolves the worker, glue, and WASM chunks with `new URL(...,
 import.meta.url)`. No URL begins with `/`, so the same files work at a custom
 domain root and beneath `/chessreplaystatic/` on GitHub Pages.
 
-Replay gives browser Reckless a fixed 50,000-node budget rather than assuming
+Replay gives browser Reckless a fixed 200,000-node budget rather than assuming
 that depth 12 means the same cost or strength as Stockfish. The node budget is
 publicly configurable at `replayConfig.browserReckless.nodes`; its value is part
 of the engine cache fingerprint.
@@ -255,9 +262,9 @@ that token from `sessionStorage` under `replay:engine-access-token`.
   `static/vendor/reckless/SOURCE.md` and this README.
 - Piece artwork: Cburnett, Alpha, and Merida sets from Lichess. The Lichess
   license is included at `static/pieces/LICHESS-LICENSE.txt`.
-- Optional Plus engine gateway: Lc0 source is available at
+- Optional monthly-compute engine gateway: Lc0 source is available at
   <https://github.com/LeelaChessZero/lc0> under GPL-3.0-or-later.
-- Optional Plus engine gateway: Reckless source is available at
+- Optional monthly-compute engine gateway: Reckless source is available at
   <https://github.com/codedeliveryservice/Reckless> under AGPL-3.0.
 
 ## Replay license

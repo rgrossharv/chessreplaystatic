@@ -46,6 +46,8 @@ export async function initCloudSession(onChange) {
     const app = appModule.initializeApp(replayConfig.firebase);
     auth = authModule.getAuth(app);
     await authModule.setPersistence(auth, authModule.browserLocalPersistence);
+    authModule.useDeviceLanguage(auth);
+    await authModule.getRedirectResult(auth);
     try {
       db = firestoreModule.initializeFirestore(app, {
         localCache: firestoreModule.persistentLocalCache({
@@ -100,6 +102,10 @@ export async function signInOrLink(name) {
     activeUser = result.user;
     return publicUser(result.user);
   } catch (error) {
+    if (["auth/popup-blocked", "auth/operation-not-supported-in-this-environment"].includes(error.code)) {
+      await firebase.signInWithRedirect(auth, provider);
+      return null;
+    }
     if (error.code !== "auth/account-exists-with-different-credential") throw friendlyAuthError(error);
     const email = error.customData?.email;
     const pendingCredential = name === "github"
@@ -118,7 +124,7 @@ export async function signInOrLink(name) {
 
 function friendlyAuthError(error) {
   if (["auth/popup-closed-by-user", "auth/cancelled-popup-request"].includes(error.code)) return new Error("Sign-in was cancelled.");
-  if (error.code === "auth/popup-blocked") return new Error("The sign-in popup was blocked by this browser.");
+  if (error.code === "auth/unauthorized-domain") return new Error("This site is not yet listed as an authorized Firebase sign-in domain.");
   if (error.code === "auth/credential-already-in-use") return new Error("That sign-in is already linked to another Replay account.");
   return new Error(error.message || "Sign-in failed.");
 }

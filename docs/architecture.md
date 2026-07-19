@@ -16,9 +16,9 @@ offline/device profile. It is not the authority for purchased credits, engine
 credentials, or a cross-device identity.
 
 Device profiles include a local entitlement snapshot so the UI can clearly show
-Free versus Plus state, but the snapshot is only advisory. The account API is
-the source of truth for billing, subscriptions, quotas, and remote engine
-tokens.
+whether monthly hosted-engine compute is active, but the snapshot is only
+advisory. The account API is the source of truth for billing, subscriptions,
+quotas, and remote engine tokens.
 
 ## Cloud accounts and sync
 
@@ -71,20 +71,23 @@ scoped even when the account session is longer lived.
 
 Replay uses these product rules:
 
-- Free users may import their own public games, run Stockfish or Reckless in the browser,
-  review locally cached decks, and keep device-profile preferences.
-- Plus users may select configured Lc0 cloud and Reckless cloud gateways and build master
-  decks from verified Chess.com grandmaster accounts.
+- Free users may import their own public games or PGNs, build master decks from
+  the latest 100 public games of verified Chess.com grandmasters, run Stockfish
+  or Reckless in the browser, review locally cached decks, and keep
+  device-profile preferences.
+- Monthly compute subscribers may additionally select configured Lc0 cloud and
+  Reckless cloud gateways. The entitlement buys hosted engine compute only.
 - If a user upgrades mid-session, the existing deck stays intact. New analysis
-  requests can use Plus engines after `GET /v1/session` reports the entitlement
-  and `POST /v1/engine-token` succeeds.
-- If Plus lapses, previously analyzed Plus puzzles remain visible and reviewable
-  because the deck is user study history. New remote analysis, wrong-move
-  remote evaluation, and new master-deck imports are blocked until Plus returns.
+  requests can use hosted engines after `GET /v1/session` reports the
+  entitlement and `POST /v1/engine-token` succeeds.
+- If monthly compute lapses, previously analyzed remote puzzles remain visible
+  and reviewable because the deck is user study history. New remote analysis
+  and wrong-move remote evaluation are blocked until compute returns; free
+  master-deck imports remain available.
 
 Persist entitlement state separately from review cards. Review cards should not
 be deleted or rewritten when a subscription changes; only the ability to create
-new Plus analysis is gated.
+new hosted-engine analysis is gated.
 
 ## Optional compute gateway
 
@@ -125,9 +128,8 @@ the possible 61.5 MiB first-use download before a visitor starts analysis.
 `init()`, `evaluate(fen, searchMoves)`, and `close()` contract as Stockfish. The
 adapter dynamically imports the small package wrapper, and neither that wrapper,
 its worker, nor 61.5 MiB of WASM chunks are fetched until Reckless analysis is
-explicitly started. It is a free
-local provider with ID `reckless-browser`; the remote Plus concept keeps the ID
-`reckless`.
+explicitly started. It is a free local provider with ID `reckless-browser`;
+the hosted monthly-compute provider keeps the ID `reckless`.
 
 Assets are colocated in `static/vendor/reckless/`. Both the worker URL and asset
 base are derived from `import.meta.url`, which preserves the GitHub Pages project
@@ -135,7 +137,7 @@ prefix and also works at a custom-domain root. The worker streams all four
 chunks, reports combined progress, reassembles the bytes, and instantiates the
 single-threaded SIMD build.
 
-The fixed 50,000-node default is distinct from Stockfish's depth-12 default and
+The fixed 200,000-node default is distinct from Stockfish's depth-12 default and
 is included in the descriptor fingerprint. `searchMoves` is implemented as an
 actual root-move filter in the pinned Rust/WASM build. The worker also verifies
 the best move against the requested set and raises a capability error if a

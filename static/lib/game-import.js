@@ -85,9 +85,12 @@ function lichessTimeClass(headers) {
     .find(name => event.includes(name))?.replace(/^./, char => char.toUpperCase()) || "Game";
 }
 
-function splitPgnGames(blob) {
-  const starts = [...blob.matchAll(/^\[Event\s+"/gm)].map(match => match.index);
-  return starts.map((start, index) => blob.slice(start, starts[index + 1] ?? blob.length).trim()).filter(Boolean);
+export function splitPgnGames(blob) {
+  const source = String(blob || "").trim();
+  if (!source) return [];
+  const starts = [...source.matchAll(/^\[Event\s+"/gm)].map(match => match.index);
+  if (!starts.length) return [source];
+  return starts.map((start, index) => source.slice(start, starts[index + 1] ?? source.length).trim()).filter(Boolean);
 }
 
 function pgnTimestamp(headers) {
@@ -231,6 +234,64 @@ async function importLichess(username, latestLimit = null) {
         : "No games were found in the last 7 days, so Replay imported the latest 20 public games instead."
       : "",
     emptyMessage: "That Lichess account was found, but Replay could not import any public standard chess games.",
+  };
+}
+
+export async function importPgnText({ text, playerName = "", fallbackColor = "white" }) {
+  const pgns = splitPgnGames(text);
+  if (!pgns.length) throw new Error("Choose a PGN file or paste tournament notation first.");
+  if (!["white", "black"].includes(fallbackColor)) throw new Error("Choose whether the imported player is White or Black.");
+
+  records.clear();
+  const requestedName = String(playerName || "").trim();
+  let resolvedName = requestedName;
+  const games = [];
+
+  for (let index = 0; index < pgns.length; index += 1) {
+    const pgn = pgns[index];
+    const parsed = parsePgn(pgn);
+    if (!parsed || !parsed.history().length) continue;
+    const headers = parsed.getHeaders();
+    if (headers.Variant && !["Standard", "From Position"].includes(headers.Variant)) continue;
+
+    const whiteName = headers.White && headers.White !== "?" ? headers.White : "White";
+    const blackName = headers.Black && headers.Black !== "?" ? headers.Black : "Black";
+    const requested = requestedName.toLowerCase();
+    const matchesWhite = requested && whiteName.toLowerCase() === requested;
+    const matchesBlack = requested && blackName.toLowerCase() === requested;
+    const isWhite = matchesWhite || (!matchesBlack && fallbackColor === "white");
+    const studiedName = isWhite ? whiteName : blackName;
+    if (!resolvedName && !["White", "Black"].includes(studiedName)) resolvedName = studiedName;
+
+    const id = await stableId(`pgn:${index}:${pgn}`);
+    const ended = pgnTimestamp(headers);
+    const summary = {
+      id,
+      opponent: isWhite ? blackName : whiteName,
+      opponentRating: rating(headers[isWhite ? "BlackElo" : "WhiteElo"]),
+      playerRating: rating(headers[isWhite ? "WhiteElo" : "BlackElo"]),
+      playerColor: isWhite ? "white" : "black",
+      result: resultForUser(headers.Result || "*", isWhite),
+      date: ended ? dateFormatter.format(new Date(ended * 1000)) : (headers.Date && !headers.Date.includes("?") ? headers.Date.replaceAll(".", "-") : "Imported game"),
+      timeClass: headers.Event && headers.Event !== "?" ? headers.Event : "Tournament game",
+      timeControl: headers.TimeControl || "",
+      opening: openingName(headers),
+      endTime: ended,
+      source: "pgn",
+    };
+    const username = requestedName || resolvedName || (!["White", "Black"].includes(studiedName) ? studiedName : "Imported player");
+    remember({ id, username, pgn, url: /^https?:\/\//i.test(headers.Site || "") ? headers.Site : "", summary });
+    games.push(summary);
+  }
+
+  if (!games.length) throw new Error("Replay could not find a legal standard chess game in that PGN or notation.");
+  const finalName = requestedName || resolvedName || "Imported player";
+  return {
+    games,
+    playerName: finalName,
+    window: `${games.length} imported tournament ${games.length === 1 ? "game" : "games"}`,
+    notice: `Imported ${games.length} ${games.length === 1 ? "game" : "games"} from PGN or notation.`,
+    emptyMessage: "Replay could not find a legal standard chess game in that PGN or notation.",
   };
 }
 

@@ -1,6 +1,7 @@
 import { Chess } from "../vendor/chess/chess.js";
 import { createBoardArrows } from "./board-arrows.js";
 import { createEngine, engineDescriptor, isEngineCancellation } from "./engine-providers.js";
+import { normalizePromotion, selectPromotionMove } from "./promotion.js";
 
 const PIECES = ["wK", "wQ", "wR", "wB", "wN", "wP", "bK", "bQ", "bR", "bB", "bN", "bP"];
 
@@ -73,6 +74,7 @@ export function initAnalysisBoard({ getPieceSet, getEngineProvider, onSound = ()
     analysisRevision: 0,
     pointerDrag: null,
     suppressClick: false,
+    promotion: normalizePromotion($("#analysisPromotion").value),
   };
   let arrows = null;
 
@@ -259,10 +261,10 @@ export function initAnalysisBoard({ getPieceSet, getEngineProvider, onSound = ()
 
   function attemptMove(from, to) {
     if (state.editing) return false;
-    const candidate = state.chess.moves({ square: from, verbose: true }).find(move => move.to === to);
+    const candidate = selectPromotionMove(state.chess.moves({ square: from, verbose: true }), to, state.promotion);
     if (!candidate) return false;
     if (state.cursor < state.moves.length) state.moves = state.moves.slice(0, state.cursor);
-    const played = state.chess.move({ from, to, promotion: candidate.promotion || "q" });
+    const played = state.chess.move({ from, to, promotion: candidate.promotion || state.promotion });
     state.moves.push({ san: played.san, uci: uci(played) });
     state.cursor = state.moves.length;
     clearGameAnalysis();
@@ -627,6 +629,9 @@ export function initAnalysisBoard({ getPieceSet, getEngineProvider, onSound = ()
     const parts = state.chess.fen().split(" ");
     parts[1] = event.currentTarget.value;
     loadFen(parts.join(" "));
+  });
+  $("#analysisPromotion").addEventListener("change", event => {
+    state.promotion = normalizePromotion(event.currentTarget.value);
   });
   $("#analysisPgnButton").addEventListener("click", () => {
     $("#analysisPgnError").textContent = "";

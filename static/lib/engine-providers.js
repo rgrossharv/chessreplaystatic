@@ -1,7 +1,7 @@
 import { replayConfig } from "../config.js";
 
 export const SEARCH_DEPTH = 12;
-export const RECKLESS_NODE_LIMIT = Math.min(1_000_000, Math.max(1_000, Number(replayConfig.browserReckless?.nodes) || 50_000));
+export const RECKLESS_NODE_LIMIT = Math.min(1_000_000, Math.max(1_000, Number(replayConfig.browserReckless?.nodes) || 200_000));
 
 const RECKLESS_BROWSER_VERSION = "0.1.0";
 const RECKLESS_ENGINE_COMMIT = "a6fa482c";
