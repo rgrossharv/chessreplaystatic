@@ -12,6 +12,15 @@ const defaults = {
     // Reckless depth 12 has the same cost or strength as Stockfish depth 12.
     nodes: 50000,
   },
+  firebase: null,
+  firebaseSdkVersion: "12.16.0",
+  browserEngines: {
+    reckless: {
+      // The complete alpha package is vendored on main and loads only when used.
+      enabled: true,
+      assetBaseUrl: "./vendor/reckless/",
+    },
+  },
   remoteEngines: [
     {
       id: "lc0",
@@ -40,5 +49,13 @@ export const replayConfig = Object.freeze({
   ...defaults,
   ...overrides,
   browserReckless: { ...defaults.browserReckless, ...(overrides.browserReckless || {}) },
+  browserEngines: {
+    ...defaults.browserEngines,
+    ...(overrides.browserEngines || {}),
+    reckless: {
+      ...defaults.browserEngines.reckless,
+      ...(overrides.browserEngines?.reckless || {}),
+    },
+  },
   remoteEngines: overrides.remoteEngines || defaults.remoteEngines,
 });

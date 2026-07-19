@@ -243,6 +243,25 @@ export async function importGames({ username: rawUsername, source = "chesscom", 
   throw new Error("Choose Chess.com or Lichess as the game source.");
 }
 
+export function exportImportedGames() {
+  return [...records.values()].map(record => ({
+    id: record.id,
+    username: record.username,
+    pgn: record.pgn,
+    url: record.url,
+    summary: record.summary,
+  }));
+}
+
+export function restoreImportedGames(savedRecords) {
+  records.clear();
+  for (const record of Array.isArray(savedRecords) ? savedRecords : []) {
+    if (!record?.id || !record?.pgn || !record?.summary) continue;
+    records.set(record.id, record);
+  }
+  return [...records.values()].map(record => record.summary);
+}
+
 export function getGameDetail(id) {
   const record = records.get(id);
   if (!record) throw new Error("Game not found. Import your games again.");

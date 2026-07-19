@@ -1,7 +1,7 @@
 # Replay
 
 Replay imports public Chess.com and Lichess games and turns important mistakes
-and engine-confirmed brilliancies into a spaced-repetition training deck. The production app is now a static web
+into a spaced-repetition training deck. The production app is now a static web
 site: public-game import, PGN parsing, legal move handling, puzzle creation, and
 Stockfish 18 and Reckless analysis all run in the visitor's browser. The
 Reckless browser integration is alpha software and may download about 61.5 MiB
@@ -48,18 +48,62 @@ All application and asset URLs are relative, so the site works under the
   use the same contract without sharing IDs with the local engines.
 - `static/lib/brilliancy.js` identifies material offers—including discovered
   sacrifices—and leaves the final classification to constrained engine search.
-- `static/lib/analysis-board.js` provides a legal-play board, notation, position
-  editing, FEN loading, and analysis through the selected engine provider.
+- `static/lib/analysis-board.js` provides click and drag legal play, PGN import,
+  clickable notation history, position editing, FEN loading, arrows, live
+  analysis, and progressive per-game accuracy through the selected engine
+  provider.
+- `static/lib/board-arrows.js` provides reusable right-drag board annotations for
+  both training puzzles and the general analysis board.
 - `static/lib/profile-store.js` replaces misleading server-local passwords with
   explicit device profiles. Preferences, cached analysis, and review schedules
   remain separate per profile in the browser.
+- `static/lib/auth-sync.js` adds optional remembered Google and GitHub sign-in
+  through Firebase, links matching-email providers to one UID, and syncs saved
+  games, preferences, reports, and review schedules through Firestore.
+- `static/lib/engine-play.js` provides a playable Stockfish board and the
+  browser-native Reckless integration boundary.
+- `static/lib/chess-report.js` scans up to 100 public games with local Stockfish,
+  groups costly moves into tactical patterns, and links the strongest patterns
+  to labeled Lichess puzzle themes.
 - `static/config.js` contains public deployment configuration. Never put engine
   provider keys or other secrets there.
 
-The static app is complete without a backend. Cross-device accounts, billing,
-credits, and paid compute need a small external service because secrets and
-authoritative account data cannot safely live in GitHub Pages. The expected API
-boundaries are documented in [`docs/architecture.md`](docs/architecture.md).
+The static app is complete without a backend. Cross-device state uses optional
+Firebase Authentication and Firestore; billing, credits, and paid compute still
+need a service because secrets and authoritative entitlement data cannot safely
+live in GitHub Pages. Setup and API boundaries are documented in
+[`docs/architecture.md`](docs/architecture.md).
+
+## Configure cloud accounts
+
+Create a Firebase web app, enable Google and GitHub providers, keep the
+Authentication setting at **one account per email address**, create Firestore,
+and deploy [`firestore.rules`](firestore.rules). Add the public web configuration
+to `static/config.js`:
+
+```js
+firebase: {
+  apiKey: "...",
+  authDomain: "your-project.firebaseapp.com",
+  projectId: "your-project",
+  appId: "...",
+},
+```
+
+Authorize the GitHub Pages domain in Firebase Authentication and in both OAuth
+provider configurations. The SDK uses local auth persistence so an account is
+remembered after the browser restarts.
+
+## Included Reckless browser assets
+
+The complete Reckless alpha browser package—including its worker, JavaScript
+wrapper, AGPL notices, rebuild information, and all four generated WASM
+chunks—is committed under `static/vendor/reckless/` on `main`. No engine build
+or asset installation is required after cloning. The browser downloads the
+roughly 61.5 MiB package only after a visitor explicitly starts Reckless.
+
+`scripts/install-reckless.sh` is retained only for maintainers replacing the
+vendored package with a newly verified RecklessWeb build.
 
 ## How training works
 
@@ -78,21 +122,13 @@ boundaries are documented in [`docs/architecture.md`](docs/architecture.md).
   master list, scanning that player's latest 100 public standard games.
 - A position becomes a puzzle when the played move loses at least three pawns,
   misses a forced mate, or misses a clearly winning position.
-- A move becomes a brilliancy lesson only when it offers meaningful material,
-  is best or nearly best, leaves a sound position, and survives comparison with
-  every legal alternative. Replay checks direct offers, exchange sacrifices,
-  discovered sacrifices, and zwischenzugs that deliberately leave a piece en
-  prise. This follows [Chess.com's published classification
-  principles](https://support.chess.com/en/articles/8572705-how-are-moves-classified-what-is-a-blunder-or-brilliant-etc)
-  while keeping Replay's thresholds explicit and deterministic.
-- The home-page study selector can scan a player's latest 100 games specifically
-  for personal brilliancies; ordinary combined and mistake decks retain the
-  shorter recent-game window.
 - Puzzles are added to the deck after each game finishes; training can begin
   while the remaining selected games continue analyzing.
 - Again, Hard, Good, and Easy grades control when a puzzle returns.
 - Pieces support click-to-move and pointer-based drag-and-drop for mouse, pen,
   and touch.
+- Right-drag across either board to draw or remove an arrow. Shift-drag provides
+  the same action for devices where a secondary-button drag is unavailable.
 - Analysis results are cached in the browser by account, source, player, game,
   engine, and analysis version.
 

@@ -33,7 +33,7 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v6
       - name: Configure Pages
-        uses: actions/configure-pages@v5
+        uses: actions/configure-pages@v6
       - name: Validate browser modules
         run: |
           node --check static/app.js
@@ -42,7 +42,11 @@ jobs:
           node --check static/lib/game-import.js
           node --check static/lib/profile-store.js
           node --check static/lib/puzzle-rules.js
+          node --check static/lib/auth-sync.js
+          node --check static/lib/engine-play.js
+          node --check static/lib/chess-report.js
           node --check static/lib/analysis-board.js
+          node --check static/lib/board-arrows.js
           node --check static/lib/brilliancy.js
           node --check static/lib/masters.js
           node --check static/vendor/reckless/reckless-engine.js

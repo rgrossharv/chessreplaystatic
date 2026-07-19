@@ -20,7 +20,32 @@ Free versus Plus state, but the snapshot is only advisory. The account API is
 the source of truth for billing, subscriptions, quotas, and remote engine
 tokens.
 
-## Optional account and sync API
+## Cloud accounts and sync
+
+The static application includes an optional Firebase Authentication and Cloud
+Firestore adapter. Google and GitHub are the supported identity providers.
+Firebase must be configured for **one account per email address**. When a second
+provider returns an email already used by the other provider, Replay asks the
+user to prove access to the existing provider and links the new credential to
+the same Firebase UID.
+
+Replay stores only user-owned state below `users/{uid}/state/{stateId}`:
+
+- preferences;
+- imported game libraries and played-engine games;
+- spaced-repetition schedules and puzzle-solving status; and
+- generated chess-pattern reports.
+
+Deploy [`firestore.rules`](../firestore.rules) with the Firebase CLI so each UID
+can read and write only its own state. Firebase web configuration values are
+public identifiers, not secrets, but GitHub and Google OAuth client secrets must
+remain in their provider consoles.
+
+If Firebase is not configured, Replay keeps the existing guest and device
+profile behavior. The following API design remains an alternative for teams
+that do not want Firebase.
+
+## Optional custom account and sync API
 
 Use a hosted identity provider plus a durable database (for example, a small
 edge worker with managed SQL). Avoid inventing another password database inside
@@ -121,6 +146,16 @@ therefore terminate the old worker, reject pending requests with `AbortError`,
 create a fresh worker, restore the last confirmed FEN, and discard messages from
 old worker generations. View-level position tokens add a second stale-result
 guard before UI state is updated.
+
+## Browser play engines
+
+Stockfish and the alpha Reckless browser package are both vendored on `main`.
+The Play page uses Stockfish directly and exposes Reckless through the same
+framework-free `RecklessEngine` adapter in `static/vendor/reckless/`. No
+post-clone download or build step is required for the repository; a visitor's
+browser may download the roughly 61.5 MiB Reckless package when that engine is
+first selected. `scripts/install-reckless.sh` exists only for maintainers
+replacing the pinned package with a newly verified build.
 
 ## Security boundary
 
